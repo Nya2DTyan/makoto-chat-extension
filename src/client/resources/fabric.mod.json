@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "id": "makoto-chat-extension",
+  "version": "${version}",
+  "name": "Makoto Chat Extension",
+  "description": "Разделяет серверный чат на вкладки: общий чат, личные сообщения, чат города, CoreProtect, глобальный и локальный чат, тикеты. Вкладки обновляются независимо от активной, их видимость и порядок настраиваются, а ванильный рендер чата не переопределяется.",
+  "authors": [
+    "Nya2DTyan"
+  ],
+  "contact": {
+    "homepage": "https://modrinth.com/mod/makoto-chat-extension",
+    "sources": "https://github.com/Nya2DTyan/makoto-chat-extension",
+    "issues": "https://github.com/Nya2DTyan/makoto-chat-extension/issues"
+  },
+  "license": "MIT",
+  "icon": "assets/makoto-chat-extension/icon.png",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "nya2dtyan.makotochat.ChatTabsClient"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.19.5",
+    "minecraft": "~26.2",
+    "java": ">=25",
+    "fabric-api": "*"
+  }
+}
