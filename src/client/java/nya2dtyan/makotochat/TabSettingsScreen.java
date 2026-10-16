@@ -1,6 +1,7 @@
 package nya2dtyan.makotochat;
 
 import com.mojang.blaze3d.platform.InputConstants;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.input.CharacterEvent;
@@ -94,6 +95,9 @@ public final class TabSettingsScreen extends Screen {
 	/** Открытый редактор вкладки: {@code null} — режим списка. */
 	private Edit editor;
 
+	/** Запрошен ли у игры приём текста (нужен, пока открыт редактор имени). */
+	private boolean textInputOn;
+
 	public TabSettingsScreen() {
 		super(Component.literal("Вкладки чата"));
 	}
@@ -140,6 +144,19 @@ public final class TabSettingsScreen extends Screen {
 	/** Y верхней границы строки с таким номером. */
 	static int rowTop(int panelTop, int index) {
 		return panelTop + HEADER_HEIGHT + index * (ROW_HEIGHT + ROW_GAP);
+	}
+
+	/** Ширина мест под кнопки в нижней полосе редактора. */
+	static final int BUTTON_SLOT = 60;
+
+	/** Левый край кнопки «Готово» — она прижата к правому краю окна. */
+	static int doneButtonLeft(int panelLeft) {
+		return panelLeft + PANEL_WIDTH - PADDING - BUTTON_SLOT;
+	}
+
+	/** Левый край кнопки «Назад» — слева от «Готово». */
+	static int backButtonLeft(int panelLeft) {
+		return doneButtonLeft(panelLeft) - BUTTON_SLOT - 4;
 	}
 
 	/** Высота окна под такое число строк. */
@@ -295,8 +312,10 @@ public final class TabSettingsScreen extends Screen {
 		int buttonTop = panelY + panelH - FOOTER_HEIGHT + 4;
 		graphics.text(font, "ЛКМ по типу — вкл/выкл", panelX + PADDING, buttonTop, COLOR_FOOTER,
 				false);
-		graphics.text(font, "[Готово]", panelX + PANEL_WIDTH - PADDING - 50, buttonTop,
-				COLOR_BOX_ON, true);
+		// Из редактора должно быть два выхода: кнопкой и по Esc. Раньше был
+		// только «Готово», а Esc не обрабатывался — выйти было нечем.
+		graphics.text(font, "[Назад]", backButtonLeft(panelX), buttonTop, COLOR_ROW_LABEL, true);
+		graphics.text(font, "[Готово]", doneButtonLeft(panelX), buttonTop, COLOR_BOX_ON, true);
 	}
 
 	/** Квадрат с галочкой: зелёный и с отметкой — включено. */
@@ -415,10 +434,18 @@ public final class TabSettingsScreen extends Screen {
 		MessageCategory[] all = MessageCategory.values();
 		int panelH = panelHeight(all.length + 1);
 
-		// «Готово» — в правом нижнем углу окна.
-		if (y >= panelY + panelH - FOOTER_HEIGHT && x >= panelX + PANEL_WIDTH - PADDING - 56) {
-			applyEditor();
-			return true;
+		// Нижняя полоса: «Назад» и «Готово». Обе обязаны работать — выход из
+		// редактора не должен зависеть от одной клавиши.
+		if (y >= panelY + panelH - FOOTER_HEIGHT) {
+			if (x >= doneButtonLeft(panelX)) {
+				applyEditor();
+				return true;
+			}
+			if (x >= backButtonLeft(panelX)) {
+				closeEditor();
+				return true;
+			}
+			return false;
 		}
 		int row = (y - panelY - HEADER_HEIGHT) / (ROW_HEIGHT + ROW_GAP);
 		int top = rowTop(panelY, row);
@@ -438,6 +465,9 @@ public final class TabSettingsScreen extends Screen {
 		editor = new Edit(tab);
 		dragFrom = -1;
 		armedFrom = -1;
+		// Имя набирается с клавиатуры, поэтому объявляем игре, что здесь есть
+		// поле ввода: иначе символы до экрана не доходят (см. textInputFocus).
+		textInputFocus(true);
 	}
 
 	@Override
@@ -487,21 +517,57 @@ public final class TabSettingsScreen extends Screen {
 
 	@Override
 	public boolean keyPressed(KeyEvent event) {
-		if (editor == null) {
-			return super.keyPressed(event);
-		}
-		int key = event.key();
-		if (key == InputConstants.KEY_BACKSPACE) {
-			if (!editor.name.isEmpty()) {
-				editor.name.deleteCharAt(editor.name.length() - 1);
+		if (editor != null) {
+			int key = event.key();
+			if (key == InputConstants.KEY_ESCAPE) {
+				// Esc закрывает редактор, а не экран: игрок возвращается к списку
+				// вкладок и может выйти оттуда. Раньше здесь не было обработки, а
+				// ванильное закрытие по Esc запрещено (см. shouldCloseOnEsc), и
+				// из редактора было не выйти вообще — ни Esc, ни кнопкой.
+				closeEditor();
+				return true;
 			}
-			return true;
-		}
-		if (key == InputConstants.KEY_RETURN) {
-			applyEditor();
-			return true;
+			if (key == InputConstants.KEY_BACKSPACE) {
+				if (!editor.name.isEmpty()) {
+					editor.name.deleteCharAt(editor.name.length() - 1);
+				}
+				return true;
+			}
+			if (key == InputConstants.KEY_RETURN) {
+				applyEditor();
+				return true;
+			}
 		}
 		return super.keyPressed(event);
+	}
+
+	/**
+	 * Включает или выключает приём текста для этого экрана.
+	 *
+	 * <p>В 26.3 игра <b>останавливает</b> ввод текста при каждой смене экрана
+	 * ({@code Gui.setScreen} вызывает {@code stopTextInput}), и включает его
+	 * только тот, кто объявил, что в нём есть поле ввода. Без этого SDL не шлёт
+	 * символы, {@code charTyped} не вызывается и набранный текст никуда не
+	 * попадает — именно поэтому имя вкладки не набиралось.
+	 *
+	 * <p>Состояние помним у себя: повторный запрос — лишняя работа, а главное,
+	 * стенду нужно видеть, что экран действительно его сделал.
+	 */
+	private void textInputFocus(boolean on) {
+		if (textInputOn == on) {
+			return;
+		}
+		textInputOn = on;
+		Minecraft minecraft = ChatRouter.minecraft();
+		if (minecraft != null) {
+			minecraft.onTextInputFocusChange(this, on);
+		}
+	}
+
+	/** Закрывает редактор, возвращая ввод текста игре. */
+	private void closeEditor() {
+		editor = null;
+		textInputFocus(false);
 	}
 
 	/** Применяет редактор: создаёт вкладку или сохраняет правки существующей. */
@@ -527,24 +593,37 @@ public final class TabSettingsScreen extends Screen {
 			}
 			config.save();
 		}
-		editor = null;
+		closeEditor();
 		afterChange();
 	}
 
 	@Override
 	public boolean shouldCloseOnEsc() {
 		// В редакторе Esc закрывает редактор, а не всё меню: иначе набранное имя
-		// и отмеченные типы терялись бы целиком.
+		// и отмеченные типы терялись бы целиком. Сам Esc обрабатывается в
+		// keyPressed — ванильный путь сюда не доходит.
 		return editor == null;
 	}
 
 	@Override
 	public void onClose() {
 		if (editor != null) {
-			editor = null;
+			closeEditor();
 			return;
 		}
 		super.onClose();
+	}
+
+	/**
+	 * Экран заменяют другим: ввод текста за нами больше не числится.
+	 *
+	 * <p>Без этого игра осталась бы с включённым вводом после нашего экрана, и
+	 * клавиатура в другом меню вела бы себя странно.
+	 */
+	@Override
+	public void removed() {
+		super.removed();
+		textInputFocus(false);
 	}
 
 	/** Пересобирает чат: изменения вкладок сразу видно в самом чате. */
