@@ -3,6 +3,34 @@ plugins {
 	id 'maven-publish'
 }
 
+// --- Цель сборки: версия Minecraft -------------------------------------------
+// Один и тот же код собирается под несколько версий игры. Цель выбирается
+// ключом -Pmc=<версия>, а её свойства лежат в targets/<версия>.properties.
+// Так общий код правится один раз, и расхождения между версиями остаются
+// только в номерах зависимостей, а не в исходниках.
+def mc = (findProperty("mc") ?: default_mc).toString()
+def targetsDir = file("targets")
+def targetFile = file("${targetsDir}/${mc}.properties")
+if (!targetFile.exists()) {
+	throw new GradleException(
+			"Неизвестная цель сборки '${mc}'. Доступные цели: "
+					+ targetsDir.listFiles()
+							.collect { it.name.replace(".properties", "") }
+							.sort()
+							.join(", "))
+}
+def target = new java.util.Properties()
+targetFile.withInputStream { target.load(it) }
+target.each { key, value -> project.ext.set(key.toString(), value.toString()) }
+
+// Версия мода общая для всех целей, суффикс версии игры — свой:
+// makoto-chat-extension-1.0.1+26.2.jar и makoto-chat-extension-1.0.1+26.3.jar.
+version = "${mod_version}+${mc}"
+
+// Каждая цель собирается в свою папку: у версий разные Minecraft и Fabric API,
+// и общий build/ смешивал бы готовые файлы разных версий.
+layout.buildDirectory = file("build/${mc}")
+
 repositories {
 	// Add repositories to retrieve artifacts from in here.
 	// You should only use this when depending on other mods because
@@ -23,7 +51,7 @@ loom {
 }
 
 dependencies {
-	// To change the versions see the gradle.properties file
+	// To change the versions see the gradle.properties file and targets/
 	minecraft "com.mojang:minecraft:${project.minecraft_version}"
 	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
 
@@ -31,12 +59,18 @@ dependencies {
 	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
 }
 
-processResources {
-	def version = project.version
-	inputs.property "version", version
+// Подстановки в fabric.mod.json раскрываем во всех задачах обработки ресурсов,
+// а не только в основной: файл лежит в КЛИЕНТСКОМ source set, и его обрабатывает
+// отдельная задача. Если раскрывать только основную, в собранном моде останутся
+// строки "${version}" и "${mc_dep}", и Fabric Loader не сможет прочитать версию.
+tasks.withType(ProcessResources).configureEach {
+	def modVersion = project.version
+	def mcDep = project.mc_dep
+	inputs.property "version", modVersion
+	inputs.property "mc_dep", mcDep
 
 	filesMatching("fabric.mod.json") {
-		expand "version": version
+		expand "version": modVersion, "mc_dep": mcDep
 	}
 }
 
@@ -63,6 +97,16 @@ jar {
 	}
 }
 
+// Служебная задача для стендов из verify/: печатает classpath клиентского
+// source set. Стендам нужны классы Minecraft и Fabric — они загружают на этом
+// classpath собранный мод и вызывают его методы без запуска игры.
+tasks.register("printClientClasspath") {
+	def classpath = sourceSets.client.runtimeClasspath
+	doLast {
+		println classpath.asPath
+	}
+}
+
 // configure the maven publication
 publishing {
 	publications {
@@ -75,7 +119,7 @@ publishing {
 	repositories {
 		// Add repositories to publish to here.
 		// Notice: This block does NOT have the same function as the block in the top level.
-		// The repositories here will be used for publishing your artifact, not for
+		// The repositories here will be used to publish your artifact, not for
 		// retrieving dependencies.
 	}
 }

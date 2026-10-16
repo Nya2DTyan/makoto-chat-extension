@@ -25,4 +25,18 @@ public final class ChatTabsMod {
 	public static org.slf4j.Logger logger() {
 		return LOGGER;
 	}
+
+	/**
+	 * Версия мода вместе с суффиксом версии игры, например {@code 1.0.1+26.3}.
+	 *
+	 * <p>Берётся из манифеста мода, а не из константы в коде: при сборке под
+	 * новую версию Minecraft строку не нужно править руками, и в логе игрока
+	 * всегда стоит та версия, которая действительно запущена.
+	 */
+	public static String version() {
+		return net.fabricmc.loader.api.FabricLoader.getInstance()
+				.getModContainer(MOD_ID)
+				.map(container -> container.getMetadata().getVersion().getFriendlyString())
+				.orElse("неизвестно");
+	}
 }

@@ -6,18 +6,23 @@ import net.fabricmc.api.ClientModInitializer;
  * Точка входа мода: только связывание событий. Логика живёт в {@link ChatRouter},
  * чтобы её можно было проверять без запуска игры.
  *
- * <p>Замечание про API: в Fabric API для 26.2 больше нет модуля
- * {@code fabric-keybinding-api-v1} — {@link net.minecraft.client.KeyMapping}
- * регистрирует себя сам при создании, а ванильный {@code Options} подхватывает
- * его через {@code KeyMapping.ALL}. Поэтому бинды создаются напрямую.
+ * <p><b>Про создание биндов — важно для сборки под две версии игры.</b> Бинды
+ * создаются конструктором {@code KeyMapping(имя, код, категория)}, без
+ * {@code InputConstants.Type} в аргументах. Этот конструктор сам подставляет
+ * тип клавиатуры: в 26.2 это {@code KEYSYM}, в 26.3 — {@code KEYBOARD}
+ * (константу переименовали). Вызов с типом напрямую не собрался бы одним и тем
+ * же кодом ни под одну из версий. Сверено по байткоду {@code KeyMapping.<init>}
+ * в обеих версиях: трёхаргументная форма делегирует именно на клавиатурный тип.
+ *
+ * <p>Модуля {@code fabric-keybinding-api-v1} в Fabric API для 26.x больше нет:
+ * {@link net.minecraft.client.KeyMapping} регистрирует себя сам при создании,
+ * а ванильный {@code Options} подхватывает его через {@code KeyMapping.ALL}.
+ * Поэтому бинды создаются напрямую.
  */
 public class ChatTabsClient implements ClientModInitializer {
 
 	/** -1 = клавиша не назначена; игрок назначит её в настройках управления. */
 	private static final int UNBOUND = -1;
-
-	private static final com.mojang.blaze3d.platform.InputConstants.Type KEYBOARD =
-			com.mojang.blaze3d.platform.InputConstants.Type.KEYSYM;
 
 	private static net.minecraft.client.KeyMapping nextTabKey;
 	private static net.minecraft.client.KeyMapping previousTabKey;
@@ -27,10 +32,12 @@ public class ChatTabsClient implements ClientModInitializer {
 	public void onInitializeClient() {
 		ChatRouter router = ChatRouter.getInstance();
 
+		// Тип клавиатуры не указываем: конструктор подставит его сам, и код
+		// остаётся общим для 26.2 и 26.3 (см. описание класса).
 		var category = ChatTabsMod.keyCategory();
-		nextTabKey = new net.minecraft.client.KeyMapping("key.makoto_chat_extension.next_tab", KEYBOARD, UNBOUND, category);
-		previousTabKey = new net.minecraft.client.KeyMapping("key.makoto_chat_extension.previous_tab", KEYBOARD, UNBOUND, category);
-		toggleOverlayKey = new net.minecraft.client.KeyMapping("key.makoto_chat_extension.toggle_overlay", KEYBOARD, UNBOUND,
+		nextTabKey = new net.minecraft.client.KeyMapping("key.makoto_chat_extension.next_tab", UNBOUND, category);
+		previousTabKey = new net.minecraft.client.KeyMapping("key.makoto_chat_extension.previous_tab", UNBOUND, category);
+		toggleOverlayKey = new net.minecraft.client.KeyMapping("key.makoto_chat_extension.toggle_overlay", UNBOUND,
 				category);
 
 		net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents.CHAT.register(
@@ -83,7 +90,7 @@ public class ChatTabsClient implements ClientModInitializer {
 		net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents.DISCONNECT.register(
 				(handler, client) -> ChatTabFilter.getInstance().invalidateCache());
 
-		ChatTabsMod.logger().info("Chat Tabs: вкладки инициализированы (Fabric, Minecraft 26.2)");
+		ChatTabsMod.logger().info("Chat Tabs: вкладки инициализированы, версия {}", ChatTabsMod.version());
 	}
 
 	/**
