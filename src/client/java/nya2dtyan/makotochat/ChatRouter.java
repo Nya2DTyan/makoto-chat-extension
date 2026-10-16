@@ -29,15 +29,6 @@ public final class ChatRouter {
 
 	private boolean overlayVisible = true;
 
-	/**
-	 * Тик последнего сообщения — по нему вкладки гаснут вместе с чатом.
-	 *
-	 * <p>Значение {@link Integer#MIN_VALUE} означает «сообщений ещё не было»:
-	 * при вычитании возраст уйдёт за пределы int и окажется отрицательным, а
-	 * {@link TabOverlay#chatFade(int)} такой случай трактует как «покажи вкладки».
-	 */
-	private int lastMessageTick = Integer.MIN_VALUE;
-
 	private ChatRouter() {
 	}
 
@@ -219,23 +210,35 @@ public final class ChatRouter {
 		// Отложенно до тика — на момент события сообщение могло ещё не
 		// доехать до чата, и пересборка его бы не увидела.
 		ChatTabFilter.getInstance().markDirty();
-		// Запоминаем тик последнего сообщения: по нему вкладки гаснут
-		// вместе с чатом, ровно через 10 секунд после последней реплики.
-		Minecraft minecraft = Minecraft.getInstance();
-		if (minecraft != null && minecraft.gui != null && minecraft.gui.hud != null) {
-			lastMessageTick = minecraft.gui.hud.getGuiTicks();
-		}
 	}
 
 	/**
-	 * Тик, когда пришло последнее сообщение.
+	 * Тик, когда игрок закрыл экран чата.
 	 *
-	 * <p>Счётчик тот же, что у ванильного чата ({@code Hud.getGuiTicks()}), поэтому
-	 * сравнение с ним даёт ровно тот же возраст сообщения, какой считает рендер.
-	 * Пока ни одного сообщения не было, полоса считается видимой.
+	 * <p>Это единственный вход для видимости полоски вкладок в HUD: она
+	 * раскрывается при открытии чата и гаснет после его закрытия, как старые
+	 * сообщения. Приход новых сообщений её <b>не</b> раскрывает — иначе полоска
+	 * появлялась бы вместе с каждой репликой, хотя игрок чат не открывал.
+	 *
+	 * <p>Значение {@link Integer#MIN_VALUE} означает «чат ещё не открывали»:
+	 * вкладки в HUD тогда скрыты. Счётчик тот же, что у ванильного чата
+	 * ({@code Hud.getGuiTicks()}).
 	 */
-	public int lastMessageTick() {
-		return lastMessageTick;
+	private int chatClosedTick = Integer.MIN_VALUE;
+
+	/** Запоминает момент закрытия чата — от него считается затухание полоски. */
+	public void onChatClosed(int nowTick) {
+		chatClosedTick = nowTick;
+	}
+
+	/** Тик, когда чат был закрыт; {@link Integer#MIN_VALUE} — ещё не открывали. */
+	public int chatClosedTick() {
+		return chatClosedTick;
+	}
+
+	/** Сброс перед новым миром: в нём чат ещё не открывали, полоски быть не должно. */
+	public void resetChatState() {
+		chatClosedTick = Integer.MIN_VALUE;
 	}
 
 	private RoutedMessage makeMessage(String rawText) {

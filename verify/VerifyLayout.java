@@ -12,8 +12,10 @@ import java.net.URLClassLoader;
  *       арифметические, их нельзя увидеть без игры, поэтому вынесены в
  *       проверяемую функцию {@code layoutY} и константы цветов;
  *   <li>полоска не исчезала вместе с чатом — теперь гаснет по той же формуле,
- *       что и ванильный рендер, поэтому проверяются {@code chatFade} и
- *       домножение альфы {@code withAlpha}.
+ *       что и старые сообщения, но отсчитывается от ЗАКРЫТИЯ чата: проверяются
+ *       {@code tabBarFade} и домножение альфы {@code withAlpha};
+ *   <li>полоска раскрывалась на каждое новое сообщение — теперь её видимость
+ *       зависит только от момента закрытия чата, и это проверяется отдельно.
  * </ul>
  */
 public class VerifyLayout {
@@ -76,62 +78,83 @@ public class VerifyLayout {
 	}
 
 	/**
-	 * Затухание вместе с чатом.
+	 * Затухание полоски после ЗАКРЫТИЯ чата.
 	 *
 	 * <p>Формула снята с байткода ванильного {@code ChatComponent$AlphaCalculator}:
 	 * {@code (1 − age/200) × 10}, clamp в 0..1, результат в квадрате. Важно, что
 	 * сначала вычитание и только потом умножение — с неверными скобками ноль
 	 * выходит на 20-м тике, и вкладки гаснут за секунду вместо десяти.
+	 *
+	 * <p>Отсчёт идёт от закрытия чата, а не от последнего сообщения: полоска
+	 * должна раскрываться при открытии чата и не появляться на каждую реплику.
+	 * Поэтому здесь же проверяется, что в роутере не осталось состояния,
+	 * связывающего видимость с приходом сообщений.
 	 */
 	private static void verifyFade(Class<?> overlay, ClassLoader loader) throws Exception {
-		Method chatFade = findMethod(overlay, "chatFade", 1);
-		check("метод chatFade(int) существует", chatFade != null);
-		if (chatFade == null) {
+		Method tabBarFade = findMethod(overlay, "tabBarFade", 1);
+		check("метод tabBarFade(int) существует", tabBarFade != null);
+		if (tabBarFade == null) {
 			return;
 		}
-		chatFade.setAccessible(true);
+		tabBarFade.setAccessible(true);
 
-		Object router = Class.forName("nya2dtyan.makotochat.ChatRouter", true, loader)
-				.getMethod("getInstance").invoke(null);
-		Field lastMessageTick = router.getClass().getDeclaredField("lastMessageTick");
-		lastMessageTick.setAccessible(true);
+		Class<?> routerClass = Class.forName("nya2dtyan.makotochat.ChatRouter", true, loader);
+		Object router = routerClass.getMethod("getInstance").invoke(null);
+		Method onChatClosed = routerClass.getMethod("onChatClosed", int.class);
+		Method resetChatState = routerClass.getMethod("resetChatState");
+
+		// Чат в этом мире ещё не открывали — в HUD полоски быть не должно.
+		resetChatState.invoke(router);
+		check("до открытия чата полоска скрыта",
+				(float) tabBarFade.invoke(null, 100) == 0.0f);
 
 		int base = 1000;
-		lastMessageTick.set(router, base);
+		onChatClosed.invoke(router, base);
 
-		check("сразу после сообщения вкладки видны полностью",
-				Math.abs((float) chatFade.invoke(null, base) - 1.0f) < 0.001f);
+		check("сразу после закрытия чата полоска видна полностью",
+				Math.abs((float) tabBarFade.invoke(null, base) - 1.0f) < 0.001f);
 		// Полная видимость держится 9 секунд, затем затухание за последнюю.
-		check("через 5 секунд вкладки ещё видны",
-				(float) chatFade.invoke(null, base + 100) > 0.0f);
-		check("через 9 секунд вкладки ещё видны",
-				(float) chatFade.invoke(null, base + 180) > 0.0f);
-		check("через 10 секунд вкладки гаснут полностью",
-				(float) chatFade.invoke(null, base + 200) == 0.0f);
-		check("после 10 секунд остаются скрытыми",
-				(float) chatFade.invoke(null, base + 500) == 0.0f);
+		check("через 5 секунд полоска ещё видна",
+				(float) tabBarFade.invoke(null, base + 100) > 0.0f);
+		check("через 9 секунд полоска ещё видна",
+				(float) tabBarFade.invoke(null, base + 180) > 0.0f);
+		check("через 10 секунд полоска гаснет полностью",
+				(float) tabBarFade.invoke(null, base + 200) == 0.0f);
+		check("после 10 секунд остаётся скрытой",
+				(float) tabBarFade.invoke(null, base + 500) == 0.0f);
 		check("видимость не возрастает со временем",
-				(float) chatFade.invoke(null, base + 150) <= (float) chatFade.invoke(null, base + 50));
-		check("затухание монотонно убывает", monotonicallyDecreasing(chatFade, base, 200));
+				(float) tabBarFade.invoke(null, base + 150) <= (float) tabBarFade.invoke(null, base + 50));
+		check("затухание монотонно убывает", monotonicallyDecreasing(tabBarFade, base, 200));
 
-		// Сообщений ещё не было — показывать вкладки, иначе полоса мигала бы
-		// при входе в мир до первого сообщения.
-		lastMessageTick.set(router, Integer.MIN_VALUE);
-		check("до первого сообщения вкладки показаны",
-				(float) chatFade.invoke(null, 100) == 1.0f);
+		// Главное требование: новые сообщения полоску не раскрывают. Значит,
+		// в роутере не должно остаться поля, по которому видимость привязана к
+		// приходу сообщений, — иначе связь вернётся при следующей правке.
+		boolean tiedToMessages = false;
+		for (Field f : routerClass.getDeclaredFields()) {
+			if (f.getName().contains("MessageTick")) {
+				tiedToMessages = true;
+			}
+		}
+		check("видимость полоски не завязана на тик последнего сообщения", !tiedToMessages);
+
+		// Повторное открытие и закрытие чата снова раскрывают полоску.
+		onChatClosed.invoke(router, base + 5000);
+		check("после повторного закрытия чата полоска снова видна",
+				(float) tabBarFade.invoke(null, base + 5000) == 1.0f);
 
 		// Смена мира обнуляет счётчик тиков: возраст уходит в минус, и такое
-		// тоже должно означать «показать», а не «скрыть».
-		lastMessageTick.set(router, 5000);
-		check("если тик обогнал сообщение, вкладки показаны",
-				(float) chatFade.invoke(null, 10) == 1.0f);
+		// должно означать «показать», а не «скрыть». Штатно состояние сбрасывает
+		// вход в мир, это лишь подстраховка от залипшей скрытой полоски.
+		onChatClosed.invoke(router, 5000);
+		check("если тик обогнал закрытие чата, полоска показана",
+				(float) tabBarFade.invoke(null, 10) == 1.0f);
 	}
 
 	/** Проверяет, что ни на одном шаге затухания видимость не подскакивает. */
-	private static boolean monotonicallyDecreasing(Method chatFade, int base, int span) throws Exception {
+	private static boolean monotonicallyDecreasing(Method tabBarFade, int base, int span) throws Exception {
 		float previous = Float.MAX_VALUE;
 		for (int age = 0; age <= span; age += 5) {
-			float value = (float) chatFade.invoke(null, base + age);
+			float value = (float) tabBarFade.invoke(null, base + age);
 			if (value > previous) {
 				return false;
 			}

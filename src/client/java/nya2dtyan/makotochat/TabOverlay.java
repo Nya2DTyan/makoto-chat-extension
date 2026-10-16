@@ -124,7 +124,7 @@ public final class TabOverlay {
 				ChatTabsClient.handleKeyPress());
 	}
 
-	/** Подписка на отрисовку и клики конкретного открытого экрана чата. */
+	/** Подписка на отрисовку, клики и закрытие конкретного открытого экрана чата. */
 	private static void registerPerScreen(ChatScreen screen) {
 		ScreenEvents.afterExtract(screen)
 				.register((s, graphics, mouseX, mouseY, delta) -> {
@@ -132,6 +132,17 @@ public final class TabOverlay {
 						draw(graphics, Minecraft.getInstance().font, layoutYInChat(s.height));
 					}
 				});
+
+		// Закрытие чата — единственный вход для видимости полоски в HUD: от
+		// этого момента она гаснет, как старые сообщения. Подписка нужна
+		// отдельно от отрисовки, потому что экран чата к моменту затухания
+		// уже закрыт и рисовать в нём нечего.
+		ScreenEvents.remove(screen).register(closed -> {
+			Minecraft minecraft = ChatRouter.minecraft();
+			if (minecraft != null && minecraft.gui != null && minecraft.gui.hud != null) {
+				ChatRouter.getInstance().onChatClosed(minecraft.gui.hud.getGuiTicks());
+			}
+		});
 
 		// true — клик уходит дальше ванильному чату, false — обработан нами.
 		ScreenMouseEvents.allowMouseClick(screen)
@@ -149,12 +160,12 @@ public final class TabOverlay {
 	/**
 	 * Слой HUD — вкладки под чатом в игре.
 	 *
-	 * <p>Прячется вместе с чатом — буквально по той же формуле затухания.
-	 * Ванильный чат не «закрывается»: {@code AlphaCalculator.timeBased} гасит
-	 * его за {@value #CHAT_FADE_TICKS} тиков после последнего сообщения
-	 * (формула разобрана по байткоду: {@code clamp(1 - (age / 200.0) * 10, 0, 1)²}).
-	 * Раньше вкладки оставались на экране постоянно и выглядели как прилипшая
-	 * полоска, когда чата уже не было видно.
+	 * <p>Раскрываются только вместе с открытием чата, а после его закрытия
+	 * гаснут — по той же формуле затухания, что и старые сообщения
+	 * ({@value #CHAT_FADE_TICKS} тиков). Приход новых сообщений полоску
+	 * <b>не</b> раскрывает: она видна ровно в том окне, которое началось
+	 * закрытием чата, поэтому не появляется вместе с каждой репликой, когда
+	 * игрок чат не открывал.
 	 */
 	private static void extractHudRenderState(GuiGraphicsExtractor graphics, DeltaTracker delta) {
 		// Клавиши обрабатываем всегда, даже когда оверлей скрыт — иначе переключение
@@ -169,7 +180,7 @@ public final class TabOverlay {
 			return;
 		}
 
-		float fade = chatFade(minecraft.gui.hud.getGuiTicks());
+		float fade = tabBarFade(minecraft.gui.hud.getGuiTicks());
 		if (fade <= 0.0f) {
 			return;
 		}
@@ -177,18 +188,28 @@ public final class TabOverlay {
 	}
 
 	/**
-	 * Насколько сейчас виден чат — та же формула, что у ванильного рендера.
+	 * Насколько сейчас видна полоска вкладок в HUD.
 	 *
-	 * <p>Возраст считается в тиках: {@code age = now - lastMessageTick}, а сам
-	 * затухающий множитель — {@code clamp((1 - age / 200) * 10, 0, 1)}, возведённый
-	 * в квадрат. Значения сверены с байткодом {@code ChatComponent$AlphaCalculator}.
+	 * <p>Возраст считается от момента закрытия чата: {@code age = now - chatClosedTick}.
+	 * Затухающий множитель — {@code clamp((1 - age / 200) * 10, 0, 1)} в квадрате;
+	 * формула и её порядок операций сверены с байткодом
+	 * {@code ChatComponent$AlphaCalculator}, чтобы полоска гасла так же, как
+	 * старые сообщения в чате.
 	 *
-	 * @return {@code 1} — чат виден полностью, {@code 0} — не виден вовсе
+	 * <p>Если чат в этом мире ещё не открывали, полоска скрыта: без этого она
+	 * висела бы на экране с самого входа в мир.
+	 *
+	 * @return {@code 1} — полоска видна полностью, {@code 0} — не видна вовсе
 	 */
-	static float chatFade(int nowTick) {
-		int age = nowTick - ChatRouter.getInstance().lastMessageTick();
+	static float tabBarFade(int nowTick) {
+		int closedAt = ChatRouter.getInstance().chatClosedTick();
+		if (closedAt == Integer.MIN_VALUE) {
+			// Чат ещё не открывали — в HUD показывать нечего.
+			return 0.0f;
+		}
+		int age = nowTick - closedAt;
 		if (age < 0) {
-			// Смена мира обнуляет счётчик тиков: считаем сообщение свежим.
+			// Смена мира обнуляет счётчик тиков: считаем, что чат закрыли только что.
 			return 1.0f;
 		}
 		if (age >= CHAT_FADE_TICKS) {

@@ -75,12 +75,15 @@ public class ChatTabsClient implements ClientModInitializer {
 				(handler, sender, client) -> {
 					ChatTabFilter.getInstance().refresh();
 					ChatRouter.getInstance().store().clearAll();
+					// В новом мире чат ещё не открывали — полоски быть не должно.
+					ChatRouter.getInstance().resetChatState();
 
 					// Видно сразу при входе: значит мод загрузился и вкладки на месте.
 					// Без этой строки «мод не загрузился» и «вкладок не видно» выглядят одинаково.
 					client.gui.hud.getChat().addClientSystemMessage(
 							net.minecraft.network.chat.Component.literal(
-									"[Chat Tabs] Общий / ЛС / Город / CO — переключение кликом по полоске внизу или клавишами."));
+									"[Makoto Chat Extension] Общий / ЛС / Город / CO — вкладки под чатом. "
+											+ "Появляются при открытии чата (T); переключение кликом или клавишами."));
 
 					if (!ChatTabFilter.getInstance().isInstalled()) {
 						// Явный сигнал: вкладки нарисованы, но разделение чата не работает.
@@ -88,7 +91,10 @@ public class ChatTabsClient implements ClientModInitializer {
 					}
 				});
 		net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents.DISCONNECT.register(
-				(handler, client) -> ChatTabFilter.getInstance().invalidateCache());
+				(handler, client) -> {
+					ChatTabFilter.getInstance().invalidateCache();
+					ChatRouter.getInstance().resetChatState();
+				});
 
 		ChatTabsMod.logger().info("Chat Tabs: вкладки инициализированы, версия {}", ChatTabsMod.version());
 	}
