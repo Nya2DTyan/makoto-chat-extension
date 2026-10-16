@@ -21,8 +21,20 @@ import net.fabricmc.api.ClientModInitializer;
  */
 public class ChatTabsClient implements ClientModInitializer {
 
-	/** -1 = клавиша не назначена; игрок назначит её в настройках управления. */
-	private static final int UNBOUND = -1;
+	/**
+	 * Код «клавиша не назначена» — берём его у самого движка, а не числом.
+	 *
+	 * <p>В 26.2 это {@code -1}, в 26.3 — {@code 0}: движок перешёл на скан-коды
+	 * SDL, и {@code InputConstants.UNKNOWN} завели заново. Ванильный
+	 * {@code KeyMapping.setAll()} пропускает бинд, у которого код равен
+	 * {@code UNKNOWN}, и сравнивает именно число ({@code shouldSetOnIngameFocus}).
+	 * С зашитым {@code -1} в 26.3 сравнение не срабатывало, {@code setAll()} звал
+	 * {@code InputConstants.isKeyDown(-1)} и лез в буфер SDL по отрицательному
+	 * индексу — игра падала с {@code IndexOutOfBoundsException} при входе в мир.
+	 * Поэтому значение берётся из {@code InputConstants.UNKNOWN}: тогда проверка
+	 * движка сходится в любой версии.
+	 */
+	private static final int UNBOUND = com.mojang.blaze3d.platform.InputConstants.UNKNOWN.getValue();
 
 	private static net.minecraft.client.KeyMapping nextTabKey;
 	private static net.minecraft.client.KeyMapping previousTabKey;

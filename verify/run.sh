@@ -40,7 +40,7 @@ mkdir -p "${OUT}"
 javac -nowarn -encoding UTF-8 -cp "${CP}" -d "${OUT}" verify/*.java
 
 failed=0
-for stand in VerifyLayout VerifyTabOrder VerifyServerFormat VerifyRouting; do
+for stand in VerifyLayout VerifyKeybinds VerifyTabOrder VerifyServerFormat VerifyRouting; do
 	echo "=== ${stand} (${MC}) ==="
 	if ! java -cp "${OUT}:${CP}" "${stand}" "${JAR}"; then
 		failed=1
