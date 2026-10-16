@@ -63,7 +63,7 @@ public final class ChatRouter {
 	 * @return строку, которую нужно отправить на сервер
 	 */
 	public String withCityPrefix(String message) {
-		return withChannelPrefix(message, ChatChannel.CITY, CITY_PREFIX);
+		return withChannelPrefix(message, MessageCategory.CITY, CITY_PREFIX);
 	}
 
 	/** Префикс глобального ввода, который требует сервер. */
@@ -76,14 +76,29 @@ public final class ChatRouter {
 	 * а сервер получает его с «!». В поле ввода «!» не виден.
 	 */
 	public String withGlobalPrefix(String message) {
-		return withChannelPrefix(message, ChatChannel.GLOBAL_CHAT, GLOBAL_PREFIX);
+		return withChannelPrefix(message, MessageCategory.GLOBAL_CHAT, GLOBAL_PREFIX);
+	}
+
+	/**
+	 * Вкладка «под одну категорию»: показывает её, но не обычный чат.
+	 *
+	 * <p>Признак нужен для подстановки префиксов и для своего ввода. Раньше
+	 * сравнивали саму вкладку с каналом, но вкладок теперь сколько угодно:
+	 * «Город» и «Мой город» одинаково про город, а «Общий» — нет, хотя тоже
+	 * показывает городской чат. Поэтому смотрим на набор категорий: если вкладка
+	 * заведена под эту категорию и не содержит обычного чата, значит её и имеют
+	 * в виду, когда на ней печатают.
+	 */
+	private boolean activeTabDedicatedTo(MessageCategory category) {
+		ChatTab active = TabConfig.getInstance().activeTab();
+		return active.has(category) && !active.has(MessageCategory.CHAT);
 	}
 
 	/**
 	 * Общая часть подстановки префикса: только на своей вкладке, только для
 	 * обычного текста, и никогда дважды.
 	 */
-	private String withChannelPrefix(String message, ChatChannel channel, String prefix) {
+	private String withChannelPrefix(String message, MessageCategory category, String prefix) {
 		if (message == null || message.isBlank()) {
 			return message;
 		}
@@ -91,7 +106,7 @@ public final class ChatRouter {
 		if (message.startsWith("/")) {
 			return message;
 		}
-		if (activeTab() != channel) {
+		if (!activeTabDedicatedTo(category)) {
 			return message;
 		}
 		if (message.startsWith(prefix)) {
@@ -152,59 +167,63 @@ public final class ChatRouter {
 
 		// CoreProtect-команды опознаём по исходному виду, до нормализации:
 		// сервер может печатать «/co i» прямо в чате.
-		if (isCoreCommand(ChatChannel.normalize(rawText))) {
-			record(rawText, ChatChannel.GLOBAL);
-			record(rawText, ChatChannel.CORE_PROTECT);
+		if (isCoreCommand(MessageCategory.normalize(rawText))) {
+			record(rawText, MessageCategory.CORE_PROTECT);
 			return;
 		}
 
-		ChatChannel channel = MessageClassifier.classify(rawText, outOfInput);
+		MessageCategory category = MessageClassifier.classify(rawText, outOfInput);
 
-		// Отказы и сообщения об ошибках — полезная информация, но не «общий чат».
+		// Отказы и сообщения об ошибках — полезная информация, но не «обычный чат».
 		// Их ищут в CoreProtect-вкладке, где их не смешать с чужой репликой.
-		if (channel == ChatChannel.GLOBAL && fromSystem && looksLikeServerNotice(rawText)) {
-			record(rawText, ChatChannel.GLOBAL);
-			record(rawText, ChatChannel.CORE_PROTECT);
+		if (category == MessageCategory.CHAT && fromSystem && looksLikeServerNotice(rawText)) {
+			record(rawText, MessageCategory.CORE_PROTECT);
 			return;
 		}
 
 		// Городской чат по договорённости с плагином идёт с «?», поэтому такая же
-		// реплика от других игроков может прийти в общий чат. Не дублируем — вкладка
-		// «Город» заполняется по маркерам, которые сервер добавляет сам.
-		boolean alsoCity = channel == ChatChannel.GLOBAL && MessageClassifier.isCityMarked(rawText);
+		// реплика от других игроков может прийти в обычный чат. Держим её в двух
+		// категориях: во вкладках, которым нужен город, она появится, а в остальных
+		// останется обычной репликой. Раньше это делалось записью в два канала.
+		boolean alsoCity = category == MessageCategory.CHAT && MessageClassifier.isCityMarked(rawText);
 
 		// Своё собственное сообщение ничем не отличается от обычного текста:
-		// сервер добавит ник и метку только тогда, когда вернёт его эхом. Без
-		// этой проверки текст, отправленный на «Локальный», классифицировался
-		// как обычная реплика и уходил только в «Общий» — вкладка оставалась
-		// пустой, хотя реплика туда отправлена. Канал берём с активной вкладки.
-		if (outOfInput && activeTab() == ChatChannel.LOCAL) {
-			channel = ChatChannel.LOCAL;
+		// сервер добавит ник и метку только тогда, когда вернёт его эхом. Текст,
+		// отправленный на вкладку локального чата, иначе классифицировался бы как
+		// обычная реплика и не попал бы в неё — вкладка осталась бы пустой.
+		if (outOfInput && category == MessageCategory.CHAT
+				&& activeTabDedicatedTo(MessageCategory.LOCAL)) {
+			category = MessageCategory.LOCAL;
 		}
 
-		// «Общий» заполняется всем — без исключений: это запасной чат, в котором
-		// ничего не теряется. Специфичные вкладки — выборки из него, поэтому
-		// дублировать сообщение ещё и в «Общий» не нужно.
-		record(rawText, ChatChannel.GLOBAL);
-		if (channel != ChatChannel.GLOBAL) {
-			record(rawText, channel);
-		}
+		// Дальше раскладывать нечего: «Общий» и любая другая вкладка показывают
+		// сообщение сами, если его категория есть в их наборе.
+		record(rawText, category);
 		if (alsoCity) {
-			record(rawText, ChatChannel.CITY);
+			record(rawText, MessageCategory.CITY);
 		}
 	}
 
 	/**
-	 * Записывает сообщение в вкладку и сообщает фильтру, что оно там есть.
+	 * Записывает сообщение во вкладки и сообщает фильтру, что у него за категория.
 	 *
-	 * <p>Дублируем намеренно: хранилище нужно для счётчиков непрочитанного, а
-	 * сопоставление «текст → вкладка» — чтобы фильтр чата показывал ровно то,
-	 * что роутер положил, даже когда решение нестандартное (CoreProtect в двух
-	 * вкладках сразу).
+	 * <p>Хранилище нужно для счётчиков непрочитанного, а сопоставление
+	 * «текст → категория» — чтобы фильтр чата показывал ровно то, что решил
+	 * роутер, даже когда решение нестандартное (строка про CoreProtect, которую
+	 * сервер напечатал в общий чат).
+	 *
+	 * <p>Кладём во <b>все</b> вкладки, которые показывают эту категорию: вкладка —
+	 * это набор категорий, и счётчик должен считать то же, что игрок увидит,
+	 * открыв её.
 	 */
-	private void record(String rawText, ChatChannel channel) {
-		store.add(channel, makeMessage(rawText));
-		ChatTabFilter.getInstance().record(rawText, channel);
+	private void record(String rawText, MessageCategory category) {
+		RoutedMessage message = makeMessage(rawText);
+		for (ChatTab tab : TabConfig.getInstance().tabs()) {
+			if (tab.has(category)) {
+				store.add(tab, message);
+			}
+		}
+		ChatTabFilter.getInstance().record(rawText, category);
 		// Список отрисовки надо пересобрать: новое сообщение может попасть
 		// в активную вкладку, а ванильный чат сам её не пересобирает.
 		// Отложенно до тика — на момент события сообщение могло ещё не
@@ -269,7 +288,7 @@ public final class ChatRouter {
 	 * засоряет вкладку CoreProtect чужими ошибками.
 	 */
 	private static boolean looksLikeServerNotice(String rawText) {
-		String normalized = ChatChannel.normalize(rawText);
+		String normalized = MessageCategory.normalize(rawText);
 		if (!MessageClassifier.looksLikeCoreProtect(normalized)) {
 			return false;
 		}
@@ -279,8 +298,8 @@ public final class ChatRouter {
 				|| normalized.contains("не удалось") || normalized.contains("invalid");
 	}
 
-	public ChatChannel activeTab() {
-		return store.activeTab();
+	public ChatTab activeTab() {
+		return TabConfig.getInstance().activeTab();
 	}
 
 	public TabStore store() {
@@ -288,31 +307,30 @@ public final class ChatRouter {
 	}
 
 	public void cycleNext() {
-		ChatChannel next = TabSettings.getInstance().cycle(activeTab(), 1);
-		select(next);
+		select(TabConfig.getInstance().cycle(1));
 	}
 
 	public void cyclePrevious() {
-		ChatChannel previous = TabSettings.getInstance().cycle(activeTab(), -1);
-		select(previous);
+		select(TabConfig.getInstance().cycle(-1));
 	}
 
-	public void select(ChatChannel channel) {
-		// На 🔧 нельзя просто переключиться: там живёт меню настроек, а не лента
-		// сообщений, поэтому открываем его как экран.
-		if (channel == ChatChannel.SETTINGS) {
-			Minecraft minecraft = minecraft();
-			if (minecraft != null) {
-				minecraft.setScreenAndShow(new TabSettingsScreen());
-			}
+	/**
+	 * Делает вкладку активной и пересобирает видимую часть чата.
+	 *
+	 * <p>Вкладку 🔧 сюда не передают: это не лента сообщений, а вход в меню
+	 * настроек, и открывает его сама полоска.
+	 */
+	public void select(ChatTab tab) {
+		if (tab == null) {
 			return;
 		}
-		// Выключенную вкладку нельзя сделать активной — её нет на экране.
-		if (!TabSettings.getInstance().isEnabled(channel)) {
+		// Скрытую вкладку нельзя сделать активной — её нет на экране.
+		if (!tab.isVisible()) {
 			return;
 		}
-		store.setActiveTab(channel);
-		onTabChanged(channel);
+		TabConfig.getInstance().setActiveTab(tab);
+		store.markRead(tab);
+		onTabChanged(tab);
 	}
 
 	/**
@@ -323,8 +341,8 @@ public final class ChatRouter {
 	 * «какие сообщения показывать» у него меняться не должно. Отсюда было
 	 * одинаковое наполнение во всех вкладках.
 	 */
-	private void onTabChanged(ChatChannel channel) {
-		ChatTabsMod.logger().debug("Вкладка -> {}", channel.displayName());
+	private void onTabChanged(ChatTab tab) {
+		ChatTabsMod.logger().debug("Вкладка -> {}", tab.name());
 		ChatTabFilter.getInstance().rebuild();
 	}
 

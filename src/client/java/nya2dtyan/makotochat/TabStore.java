@@ -2,16 +2,22 @@ package nya2dtyan.makotochat;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.EnumMap;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
  * Хранит сообщения по вкладкам.
  *
- * <p>Главное свой��тво: <b>вкладки живут независимо</b>. Сообщение, пришедшее
+ * <p>Главное свойство: <b>вкладки живут независимо</b>. Сообщение, пришедшее
  * пока открыта вкладка «Город», всё равно попадает в «ЛС», если пришло по ЛС —
  * переключение вкладки не «проматывает» пропущенные сообщения.
+ *
+ * <p>Ключ — сама вкладка ({@link ChatTab}), а не тип сообщения: вкладок теперь
+ * может быть сколько угодно и с любым набором категорий, поэтому одну реплику
+ * кладут во все вкладки, которые её показывают, — по одной записи на вкладку.
+ * Вкладки сравниваются по ссылке, и это здесь правильно: две вкладки с
+ * одинаковым названием — всё равно разные вкладки.
  *
  * <p>Внутри каждой вкладки — кольцевой буфер фиксированного размера: серверный
  * чат не должен расти без предела, а старые сообщения всё равно недоступны
@@ -22,116 +28,101 @@ public final class TabStore {
 	/** Сколько сообщений держим в каждой вкладке. */
 	private static final int CAPACITY_PER_TAB = 500;
 
-	private final Map<ChatChannel, ArrayDeque<RoutedMessage>> tabs = new EnumMap<>(ChatChannel.class);
+	private final Map<ChatTab, ArrayDeque<RoutedMessage>> tabs = new HashMap<>();
+
+	/** Когда вкладку в последний раз смотрели — по этому считаются непрочитанные. */
+	private final Map<ChatTab, Long> lastRead = new HashMap<>();
 
 	/** Монотонный счётчик для стабильного порядка при одинаковом времени. */
 	private int lineOrderCounter;
 
-	private ChatChannel activeTab = ChatChannel.GLOBAL;
-
-	public TabStore() {
-		for (ChatChannel channel : ChatChannel.values()) {
-			tabs.put(channel, new ArrayDeque<>(CAPACITY_PER_TAB));
-		}
-	}
-
-	/** Кладёт сообщение в указанную вкладку, вытесняя самое старое при переполнении. */
-	public void add(ChatChannel channel, RoutedMessage message) {
-		ArrayDeque<RoutedMessage> queue = tabs.get(channel);
+	/** Кладёт сообщение во вкладку, вытесняя самое старое при переполнении. */
+	public void add(ChatTab tab, RoutedMessage message) {
+		ArrayDeque<RoutedMessage> queue = tabs.computeIfAbsent(tab,
+				key -> new ArrayDeque<>(CAPACITY_PER_TAB));
 		queue.addLast(message);
 		while (queue.size() > CAPACITY_PER_TAB) {
 			queue.removeFirst();
 		}
 	}
 
+	public List<RoutedMessage> messages(ChatTab tab) {
+		ArrayDeque<RoutedMessage> queue = tabs.get(tab);
+		return queue == null ? List.of() : new ArrayList<>(queue);
+	}
+
 	/**
-	 * Кладёт сообщение сразу в несколько вкладок (общий чат как источник,
-	 * из которого часть строк относится к специфичным каналам).
+	 * Сколько непрочитанных накопила вкладка, пока открыта другая.
+	 *
+	 * @param active активная вкладка: её сообщения считаются прочитанными
 	 */
-	public void addToAll(ChatChannel primary, List<ChatChannel> alsoVisible, RoutedMessage message) {
-		add(primary, message);
-		for (ChatChannel channel : alsoVisible) {
-			if (channel != primary) {
-				add(channel, message);
-			}
-		}
-	}
-
-	public List<RoutedMessage> messages(ChatChannel channel) {
-		return new ArrayList<>(tabs.get(channel));
-	}
-
-	/** Сколько непрочитанных сообщений вкладки накопила, пока открыта другая. */
-	public int unreadCount(ChatChannel channel) {
-		if (channel == activeTab) {
+	public int unreadCount(ChatTab tab, ChatTab active) {
+		if (tab == active) {
 			return 0;
 		}
+		ArrayDeque<RoutedMessage> queue = tabs.get(tab);
+		if (queue == null) {
+			return 0;
+		}
+		long readAt = lastReadAt(tab);
 		int unread = 0;
-		for (RoutedMessage message : tabs.get(channel)) {
-			if (message.timestamp() > lastReadAt(channel)) {
+		for (RoutedMessage message : queue) {
+			if (message.timestamp() > readAt) {
 				unread++;
 			}
 		}
 		return unread;
 	}
 
-	private final Map<ChatChannel, Long> lastRead = new EnumMap<>(ChatChannel.class);
-
-	private long lastReadAt(ChatChannel channel) {
-		return lastRead.getOrDefault(channel, 0L);
+	private long lastReadAt(ChatTab tab) {
+		return lastRead.getOrDefault(tab, 0L);
 	}
 
 	/** Помечает вкладку прочитанной — вызывается при переключении на неё. */
-	public void markRead(ChatChannel channel) {
+	public void markRead(ChatTab tab) {
 		long newest = 0L;
-		ArrayDeque<RoutedMessage> queue = tabs.get(channel);
-		RoutedMessage last = queue.peekLast();
+		ArrayDeque<RoutedMessage> queue = tabs.get(tab);
+		RoutedMessage last = queue == null ? null : queue.peekLast();
 		if (last != null) {
 			newest = last.timestamp();
 		}
-		lastRead.put(channel, newest);
+		lastRead.put(tab, newest);
 	}
 
-	public ChatChannel activeTab() {
-		return activeTab;
-	}
-
-	public void setActiveTab(ChatChannel channel) {
-		activeTab = channel;
-		markRead(channel);
-	}
-
-	/** Переключает вкладку по кругу — основной способ переключения. */
-	public ChatChannel cycleNext() {
-		ChatChannel[] all = ChatChannel.values();
-		int index = activeTab.ordinal() + 1;
-		ChatChannel next = all[index % all.length];
-		setActiveTab(next);
-		return next;
-	}
-
-	public ChatChannel cyclePrevious() {
-		ChatChannel[] all = ChatChannel.values();
-		int index = activeTab.ordinal() - 1 + all.length;
-		ChatChannel next = all[index % all.length];
-		setActiveTab(next);
-		return next;
-	}
-
-	public int totalIn(ChatChannel channel) {
-		return tabs.get(channel).size();
+	public int totalIn(ChatTab tab) {
+		ArrayDeque<RoutedMessage> queue = tabs.get(tab);
+		return queue == null ? 0 : queue.size();
 	}
 
 	/** Очищает вкладку — отдельная команда на случай засорения. */
-	public void clear(ChatChannel channel) {
-		tabs.get(channel).clear();
+	public void clear(ChatTab tab) {
+		ArrayDeque<RoutedMessage> queue = tabs.get(tab);
+		if (queue != null) {
+			queue.clear();
+		}
 	}
 
 	public void clearAll() {
-		for (ChatChannel channel : ChatChannel.values()) {
-			tabs.get(channel).clear();
-		}
+		tabs.clear();
+		lastRead.clear();
 		lineOrderCounter = 0;
+	}
+
+	/**
+	 * Забывает удалённую вкладку.
+	 *
+	 * <p>Без этого её сообщения остались бы в памяти до конца сессии: удалять
+	 * вкладку можно в любой момент, а ключ-ссылка держала бы её живой.
+	 */
+	public void forget(ChatTab tab) {
+		tabs.remove(tab);
+		lastRead.remove(tab);
+	}
+
+	/** Забывает всё, чего нет в списке живых вкладок. */
+	public void retainOnly(List<ChatTab> alive) {
+		tabs.keySet().retainAll(alive);
+		lastRead.keySet().retainAll(alive);
 	}
 
 	public int nextLineOrder() {

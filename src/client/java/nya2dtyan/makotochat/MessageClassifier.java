@@ -8,7 +8,7 @@ import java.util.regex.Pattern;
  *
  * <p>Логика намеренно эвристическая: у серверных плагинов нет единого протокола
  * для «это личное сообщение», поэтому входящие строки разбираются по форме.
- * Всё, что не опознано, попадает в {@link ChatChannel#GLOBAL} — вкладка «Общ»
+ * Всё, что не опознано, попадает в {@link MessageCategory#GLOBAL} — вкладка «Общ»
  * всегда остаётся полной, ничего не теряется.
  *
  * <p>Порядок проверок значим:
@@ -90,55 +90,55 @@ final class MessageClassifier {
 	 * @param outOfInput {@code true}, если сообщение — это наш собственный ввод
 	 * @return канал для этого сообщения
 	 */
-	static ChatChannel classify(String plainText, boolean outOfInput) {
-		String text = ChatChannel.normalize(plainText);
+	static MessageCategory classify(String plainText, boolean outOfInput) {
+		String text = MessageCategory.normalize(plainText);
 		if (text.isEmpty()) {
-			return ChatChannel.GLOBAL;
+			return MessageCategory.CHAT;
 		}
 
 		if (looksLikeCoreProtect(text)) {
-			return ChatChannel.CORE_PROTECT;
+			return MessageCategory.CORE_PROTECT;
 		}
 
 		// Тикеты сервера печатаются с той же меткой «MT», что и городской чат,
 		// поэтому их надо опознать раньше неё — иначе «MT Напоминание: у тебя
 		// есть новый тикет #65064» уезжал бы в «Город».
 		if (looksLikeTicket(text)) {
-			return ChatChannel.TICKETS;
+			return MessageCategory.TICKETS;
 		}
 
 		// Наш ввод с «?» — городской чат по договорённости с плагином.
 		if (outOfInput && text.startsWith("?")) {
-			return ChatChannel.CITY;
+			return MessageCategory.CITY;
 		}
 
 		// Наш ввод с «!» — глобальный чат, по тому же принципу, что и город.
 		if (outOfInput && text.startsWith("!")) {
-			return ChatChannel.GLOBAL_CHAT;
+			return MessageCategory.GLOBAL_CHAT;
 		}
 
 		// Глобальные строки сервер помечает буквой G перед ником: «G Ник реплика».
 		if (looksLikeGlobalChat(text)) {
-			return ChatChannel.GLOBAL_CHAT;
+			return MessageCategory.GLOBAL_CHAT;
 		}
 
 		// Префикс «MT» в начале строки — метка городской реплики. Проверяем
 		// раньше всего остального: городская строка может содержать стрелку,
 		// и без этого ушла бы в «ЛС».
 		if (startsWithCityTag(text)) {
-			return ChatChannel.CITY;
+			return MessageCategory.CITY;
 		}
 
 		// Строки с маркером города, но без стрелки, тоже относятся к городу.
 		if (hasAny(text, CITY_MARKERS) && !text.contains("/")) {
-			return ChatChannel.CITY;
+			return MessageCategory.CITY;
 		}
 
 		// ЛС проверяем раньше локального: у ЛС есть стрелка «->», а значит
 		// внутри неё есть и «>». Иначе «LA Тянка -> SL alive» разбиралась бы как
 		// локальная строка (слева одно слово, справа текст) и уезжала не туда.
 		if (looksLikeDirectMessage(text)) {
-			return ChatChannel.DIRECT;
+			return MessageCategory.DIRECT;
 		}
 
 		// События игроков (вход, выход, кик) сервер печатает со стрелкой в
@@ -147,16 +147,16 @@ final class MessageClassifier {
 		// «>», то есть ровно формат локальной строки, и без этой проверки
 		// каждое событие входа уезжало в «Локальный».
 		if (startsWithEventArrow(text)) {
-			return ChatChannel.GLOBAL_CHAT;
+			return MessageCategory.GLOBAL_CHAT;
 		}
 
 		// Локальный чат: «[метка] Ник [$] > текст». Отличительный признак —
 		// «>» без получателя справа, тогда как у ЛС там стоит второй ник.
 		if (looksLikeLocalChat(text)) {
-			return ChatChannel.LOCAL;
+			return MessageCategory.LOCAL;
 		}
 
-		return ChatChannel.GLOBAL;
+		return MessageCategory.CHAT;
 	}
 
 	/**
@@ -273,7 +273,7 @@ final class MessageClassifier {
 	 * тогда её надо продублировать в «Город».
 	 */
 	static boolean isCityMarked(String rawText) {
-		String text = ChatChannel.normalize(rawText);
+		String text = MessageCategory.normalize(rawText);
 		return startsWithCityTag(text) || hasAny(text, CITY_MARKERS);
 	}
 

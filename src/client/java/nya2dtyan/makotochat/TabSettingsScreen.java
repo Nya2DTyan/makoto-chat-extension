@@ -1,206 +1,448 @@
 package nya2dtyan.makotochat;
 
+import com.mojang.blaze3d.platform.InputConstants;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.input.CharacterEvent;
+import net.minecraft.client.input.KeyEvent;
 import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.network.chat.Component;
 
+import java.util.EnumSet;
+import java.util.List;
+
 /**
- * Меню настроек вкладок: список строк «название слева, бокс справа».
+ * Меню настроек вкладок: список вкладок игрока и редактор одной вкладки.
  *
- * <p>Открывается кликом по вкладке 🔧. Экран собственный, а не ванильный
- * {@code OptionsSubScreen}: там строки стандартные, а здесь каждая строка —
- * наш канал чата, и клик по ней должен гасить и зажигать конкретную вкладку.
+ * <p>Два режима в одном экране:
  *
- * <p><b>Список рисуется вручную</b>, потому что ванильный {@code Button} не
- * умеет состояние «включено/выключено» без своей картинки: пришлось бы
- * рисовать текстуру галочки самим. Строка — это рамка {@link #fill} плюс
- * подпись шрифтом, а попадание клика считается по тем же координатам.
+ * <ul>
+ *   <li><b>Список</b> — вкладки в порядке полоски. Слева ручка, за неё вкладку
+ *       перетаскивают; клик по названию открывает редактор; справа глаз
+ *       (показывать ли вкладку в полоске) и крестик (удалить). Внизу строка
+ *       «＋ Новая вкладка» — она и открывает выбор типов сообщений;</li>
+ *   <li><b>Редактор</b> — имя вкладки и список типов сообщений с галочками.
+ *       Для новой вкладки он пустой, и игрок сам решает, что в неё попадает.</li>
+ * </ul>
  *
- * <p>Отдельная функция {@link #layout(int, int)} считает прямоугольники без
- * доступа к GUI, чтобы геометрию можно было проверить тестом.
+ * <p><b>Почему вкладка — это набор типов сообщений.</b> Раньше вкладка была
+ * жёстко привязана к каналу, и «Общий» показывал всё без исключений. Теперь
+ * достаточно снять галочку — и тикеты уйдут из «Общего», оставшись только там,
+ * где эта категория отмечена. Особых случаев в коде не осталось: видимость
+ * сообщения во вкладке — это пересечение двух наборов.
+ *
+ * <p>Геометрия вынесена в чистые функции ({@link #rowTop}, {@link #panelHeight},
+ * {@link #slotAt}): ошибку раскладки не видно без запуска игры, а так её
+ * проверяет стенд.
  */
 public final class TabSettingsScreen extends Screen {
 
 	/** Ширина окна в GUI-пикселях. */
-	private static final int PANEL_WIDTH = 200;
+	static final int PANEL_WIDTH = 260;
 
-	/** Заголовок + список вкладок + рамка сверху и снизу. */
-	private static final int HEADER_HEIGHT = 20;
-	private static final int ROW_HEIGHT = 14;
-	private static final int ROW_GAP = 2;
-	private static final int FOOTER_HEIGHT = 16;
-	private static final int PADDING = 6;
+	/** Заголовок, строки, нижняя подсказка и рамка. */
+	static final int HEADER_HEIGHT = 18;
+	static final int ROW_HEIGHT = 14;
+	static final int ROW_GAP = 2;
+	static final int FOOTER_HEIGHT = 16;
+	static final int PADDING = 6;
+
+	/** Сторона квадратного бокса с галочкой. */
+	static final int BOX_SIZE = 9;
+
+	/** Ширина служебных мест строки: ручка перетаскивания, глаз, крестик. */
+	static final int HANDLE_WIDTH = 8;
+	static final int BUTTON_WIDTH = 10;
 
 	/** Цвета: ARGB, альфа обязательна — её читает {@code fill} и {@code text}. */
 	private static final int COLOR_PANEL_BG = 0xC8101010;
 	private static final int COLOR_PANEL_BORDER = 0xFF6E6E6E;
 	private static final int COLOR_TITLE = 0xFFFFD24A;
 	private static final int COLOR_ROW_LABEL = 0xFFE0E0E0;
+	private static final int COLOR_ROW_DIM = 0xFF9A9A9A;
 	private static final int COLOR_ROW_HOVER = 0x40FFFFFF;
 	private static final int COLOR_BOX_ON = 0xFF7BD44A;
 	private static final int COLOR_BOX_OFF = 0xFF555555;
 	private static final int COLOR_BOX_MARK = 0xFF101010;
 	private static final int COLOR_FOOTER = 0xFF9A9A9A;
 	private static final int COLOR_HANDLE = 0xFF8A8A8A;
-	private static final int COLOR_DRAG_TARGET = 0x60FFD24A;
-
-	/** Сторона квадратного бокса с галочкой. */
-	private static final int BOX_SIZE = 9;
-
-	/** Ширина «ручки» перетаскивания слева в каждой строке. */
-	private static final int HANDLE_WIDTH = 8;
+	private static final int COLOR_FIELD = 0xFF3A3A3A;
 
 	/** Свой заголовок: поле {@code title} у {@link Screen} приватное. */
-	private static final String TITLE = "🔧 Настройки вкладок";
+	private static final String TITLE = "🔧 Вкладки чата";
 
-	private final TabSettings settings = TabSettings.getInstance();
+	/** Ячейки строки списка — по ним проверяется попадание клика. */
+	static final int SLOT_HANDLE = 0;
+	static final int SLOT_NAME = 1;
+	static final int SLOT_EYE = 2;
+	static final int SLOT_DELETE = 3;
+
+	private final TabConfig config = TabConfig.getInstance();
 
 	private int panelX;
 	private int panelY;
 	private int mouseX = -1;
 	private int mouseY = -1;
 
-	/**
-	* Индекс строки, которую тянут, и {@code -1}, когда не тянут.
-	*
-	* <p>Отдельный от «наведённой» строки: наведение меняется сама, а перетаскивание
-	* живёт от нажатия до отпускания, и пока её тянут — строка едет за курсором.
-	*/
+	/** Строка, которую тянут, и куда она встанет, если отпустить кнопку. */
 	private int dragFrom = -1;
-	
-	/** Куда сейчас встанет перетаскиваемая строка, если отпустить кнопку. */
 	private int dragTo = -1;
-	
-	/**
-	* Строка, на которой зажата кнопка, но ещё не начато перетаскивание.
-	*
-	* <p>Нужна, чтобы отличить клик от перетаскивания: пока мышь не сдвинулась,
-	* нажатие считается обычным кликом по названию и переключает вкладку, а первое
-	* же смещение превращает его в перетаскивание.
-	*/
+
+	/** Строка, на которой зажата кнопка, но перетаскивание ещё не начато. */
 	private int armedFrom = -1;
-	
+
+	/** Открытый редактор вкладки: {@code null} — режим списка. */
+	private Edit editor;
+
 	public TabSettingsScreen() {
-	super(Component.literal("Настройки вкладок"));
+		super(Component.literal("Вкладки чата"));
+	}
+
+	/** Что редактируем: существующую вкладку или ещё не созданную. */
+	private static final class Edit {
+
+		/** Существующая вкладка или {@code null}, если вкладка ещё создаётся. */
+		private final ChatTab target;
+
+		private final StringBuilder name = new StringBuilder();
+
+		private final EnumSet<MessageCategory> categories = EnumSet.noneOf(MessageCategory.class);
+
+		private Edit(ChatTab target) {
+			this.target = target;
+			if (target != null) {
+				name.append(target.name());
+				categories.addAll(target.categories());
+			} else {
+				name.append("Вкладка ");
+				name.append(TabConfig.getInstance().tabs().size() + 1);
+			}
+		}
+
+		private boolean isNew() {
+			return target == null;
+		}
 	}
 
 	@Override
 	protected void init() {
-		layout(width, height);
+		panelX = panelX(width);
+		panelY = panelY(height, rowCount());
 	}
+
+	// --- чистая геометрия: её проверяет стенд --------------------------------
+
+	/** Левый край окна: по центру экрана. */
+	static int panelX(int screenWidth) {
+		return Math.max(PADDING, (screenWidth - PANEL_WIDTH) / 2);
+	}
+
+	/** Y верхней границы строки с таким номером. */
+	static int rowTop(int panelTop, int index) {
+		return panelTop + HEADER_HEIGHT + index * (ROW_HEIGHT + ROW_GAP);
+	}
+
+	/** Высота окна под такое число строк. */
+	static int panelHeight(int rows) {
+		return HEADER_HEIGHT + rows * (ROW_HEIGHT + ROW_GAP) + FOOTER_HEIGHT;
+	}
+
+	/** Y верхнего края окна: по центру экрана. */
+	static int panelY(int screenHeight, int rows) {
+		return Math.max(PADDING, (screenHeight - panelHeight(rows)) / 2);
+	}
+
+	/**
+	 * В какую ячейку строки попадает координата X (от левого края окна).
+	 *
+	 * <p>Порядок проверок важен: глаз и крестик стоят у правого края и идут
+	 * первыми, иначе название вкладки «съело» бы клики по ним.
+	 */
+	static int slotAt(int relX) {
+		int deleteFrom = PANEL_WIDTH - PADDING - BUTTON_WIDTH;
+		int eyeFrom = deleteFrom - BUTTON_WIDTH - 2;
+		if (relX >= deleteFrom) {
+			return SLOT_DELETE;
+		}
+		if (relX >= eyeFrom) {
+			return SLOT_EYE;
+		}
+		if (relX < PADDING + HANDLE_WIDTH) {
+			return SLOT_HANDLE;
+		}
+		return SLOT_NAME;
+	}
+
+	/** Сколько строк в списке: вкладки, «новая вкладка» и «сбросить». */
+	int rowCount() {
+		return config.tabs().size() + 2;
+	}
+
+	/** Номер строки «＋ Новая вкладка». */
+	int newRowIndex() {
+		return config.tabs().size();
+	}
+
+	/** Номер строки «Сбросить настройки». */
+	int resetRowIndex() {
+		return config.tabs().size() + 1;
+	}
+
+	// --- отрисовка ----------------------------------------------------------
 
 	@Override
 	public void extractRenderState(GuiGraphicsExtractor graphics, int mx, int my, float delta) {
 		super.extractRenderState(graphics, mx, my, delta);
 		mouseX = mx;
 		mouseY = my;
-		drawPanel(graphics);
+		panelX = panelX(width);
+		panelY = panelY(height, rowCount());
+		if (editor == null) {
+			drawList(graphics);
+		} else {
+			drawEditor(graphics);
+		}
 	}
 
-	private void drawPanel(GuiGraphicsExtractor graphics) {
-		int fontHeight = font.lineHeight;
-		int panelH = layoutHeight();
-
-		// Фон и рамка: как у ванильных меню, чтобы не выбиваться из интерфейса.
+	private void drawList(GuiGraphicsExtractor graphics) {
+		int panelH = panelHeight(rowCount());
 		graphics.fill(panelX, panelY, panelX + PANEL_WIDTH, panelY + panelH, COLOR_PANEL_BG);
 		outline(graphics, panelX, panelY, PANEL_WIDTH, panelH);
+		graphics.text(font, TITLE, panelX + (PANEL_WIDTH - font.width(TITLE)) / 2, panelY + 5,
+				COLOR_TITLE, true);
 
-		// Заголовок по центру — так же, как в меню сервера на скриншоте.
-		graphics.text(font, TITLE, panelX + (PANEL_WIDTH - font.width(TITLE)) / 2,
-				panelY + 5, COLOR_TITLE, true);
-
-		// Строки: слева ручка перетаскивания, название, справа бокс с галочкой.
-		ChatChannel[] rows = rows();
-		for (int i = 0; i < rows.length; i++) {
-			// Во время перетаскивания порядок рисуется «как будет», поэтому
-			// перетаскиваемая строка уже стоит на своём новом месте.
-			ChatChannel channel = rows[i];
-			boolean dragging = dragFrom >= 0 && i == dragFrom;
-			int rowY = rowY(i);
-			boolean configurable = settings.isConfigurable(channel);
-			boolean enabled = settings.isEnabled(channel);
-
-			// Место, куда встанет строка: жёлтая полоса на всю ширину.
-			if (dragFrom >= 0 && i == dragTo && dragTo != dragFrom) {
-				graphics.fill(panelX + 1, rowY, panelX + PANEL_WIDTH - 1, rowY + ROW_HEIGHT,
-						COLOR_DRAG_TARGET);
-			}
-
-			if (dragging) {
-				// Строка едет за курсором и рисуется последней — поверх остальных.
-				continue;
-			}
-
-			if (hovered(i, rows.length)) {
-				graphics.fill(panelX + 1, rowY, panelX + PANEL_WIDTH - 1, rowY + ROW_HEIGHT,
+		List<ChatTab> tabs = config.tabs();
+		for (int i = 0; i < tabs.size(); i++) {
+			ChatTab tab = tabs.get(i);
+			int top = rowTop(panelY, i);
+			if (mouseY >= top && mouseY < top + ROW_HEIGHT) {
+				graphics.fill(panelX + 1, top, panelX + PANEL_WIDTH - 1, top + ROW_HEIGHT,
 						COLOR_ROW_HOVER);
 			}
 
-			drawRow(graphics, channel, rowY, configurable, enabled);
+			// Ручка перетаскивания: за неё вкладку двигают.
+			graphics.fill(panelX + PADDING, top + 3, panelX + PADDING + 2, top + ROW_HEIGHT - 3,
+					COLOR_HANDLE);
+
+			// Активную вкладку подсвечиваем: видно, что сейчас открыто в чате.
+			boolean active = tab == config.activeTab();
+			graphics.text(font, tab.name(), panelX + PADDING + HANDLE_WIDTH + 2, top + 3,
+					active ? COLOR_TITLE : COLOR_ROW_LABEL, true);
+
+			String summary = summaryOf(tab);
+			int summaryX = panelX + PADDING + HANDLE_WIDTH + 2 + font.width(tab.name()) + 6;
+			int summaryLimit = panelX + PANEL_WIDTH - PADDING - BUTTON_WIDTH * 2 - 6;
+			if (summaryX < summaryLimit) {
+				graphics.text(font, trim(summary, summaryX, summaryLimit), summaryX, top + 3,
+						COLOR_ROW_DIM, false);
+			}
+
+			// Глаз: показывать вкладку в полоске или нет.
+			int eyeX = panelX + PANEL_WIDTH - PADDING - BUTTON_WIDTH * 2 - 2;
+			graphics.text(font, tab.isVisible() ? "◉" : "○", eyeX + 1, top + 3,
+					tab.isVisible() ? COLOR_BOX_ON : COLOR_BOX_OFF, true);
+
+			// Крестик у основной вкладки не рисуем: её удалить нельзя.
+			if (!tab.isMain()) {
+				graphics.text(font, "✕", panelX + PANEL_WIDTH - PADDING - BUTTON_WIDTH + 1, top + 3,
+						COLOR_ROW_DIM, true);
+			}
 		}
 
-		// Перетаскиваемая строка — поверх всех, с рамкой, чтобы её было видно.
-		if (dragFrom >= 0) {
-			int ghostY = mouseY - ROW_HEIGHT / 2;
-			graphics.fill(panelX + 1, ghostY, panelX + PANEL_WIDTH - 1, ghostY + ROW_HEIGHT,
-					COLOR_ROW_HOVER);
-			outline(graphics, panelX + 1, ghostY, PANEL_WIDTH - 2, ROW_HEIGHT);
-			drawRow(graphics, rows[dragFrom], ghostY,
-					settings.isConfigurable(rows[dragFrom]), settings.isEnabled(rows[dragFrom]));
-		}
+		int newTop = rowTop(panelY, newRowIndex());
+		graphics.text(font, "＋ Новая вкладка", panelX + PADDING + HANDLE_WIDTH + 2, newTop + 3,
+				COLOR_BOX_ON, true);
+		int resetTop = rowTop(panelY, resetRowIndex());
+		graphics.text(font, "Сбросить настройки", panelX + PADDING + HANDLE_WIDTH + 2, resetTop + 3,
+				COLOR_ROW_DIM, true);
 
-		String footer = "Клик — вкл/выкл.  Тяни строку — порядок.  Esc — закрыть";
-		graphics.text(font, footer,
-				panelX + (PANEL_WIDTH - font.width(footer)) / 2,
-				panelY + panelH - FOOTER_HEIGHT, COLOR_FOOTER, true);
+		graphics.text(font, "ЛКМ по названию — настроить, за ручку — перетащить",
+				panelX + PADDING, panelY + panelH - FOOTER_HEIGHT + 4, COLOR_FOOTER, false);
 	}
 
-	/**
-	 * Нажатие: клик по боксу с галочкой переключает вкладку, клик по строке — начало перетаскивания.
-	 *
-	 * <p>Два действия разведены по месту клика, а не по кнопке мыши: привычный
-	 * клик по названию включает-выключает, а тянуть вкладку удобнее всего за
-	 * левый край строки с «ручкой». Клик по самой ручке тоже начинает перетаскивание —
-	 * иначе ручка была бы значком, который ничего не делает.
-	 *
-	 * <p>Перетаскивание фиксируется только на первом движении мыши (см.
-	 * {@link #mouseDragged}): без этого обычный клик по строке без смещения
-	 * считался бы перетаскиванием и гасил бы вкладку вместо переключения.
-	 */
+	private void drawEditor(GuiGraphicsExtractor graphics) {
+		MessageCategory[] all = MessageCategory.values();
+		int panelH = panelHeight(all.length + 1);
+		graphics.fill(panelX, panelY, panelX + PANEL_WIDTH, panelY + panelH, COLOR_PANEL_BG);
+		outline(graphics, panelX, panelY, PANEL_WIDTH, panelH);
+
+		String title = editor.isNew() ? "Новая вкладка" : "Вкладка «" + editor.target.name() + "»";
+		graphics.text(font, title, panelX + (PANEL_WIDTH - font.width(title)) / 2, panelY + 5,
+				COLOR_TITLE, true);
+
+		// Имя вкладки: своё поле, курсор стоит в конце строки.
+		int fieldTop = rowTop(panelY, 0);
+		graphics.text(font, "Имя:", panelX + PADDING, fieldTop + 3, COLOR_ROW_LABEL, false);
+		int fieldX = panelX + PADDING + font.width("Имя:") + 4;
+		int fieldRight = panelX + PANEL_WIDTH - PADDING;
+		graphics.fill(fieldX, fieldTop + 1, fieldRight, fieldTop + ROW_HEIGHT - 1, COLOR_FIELD);
+		String shownName = trim(editor.name.toString(), fieldX, fieldRight - 6);
+		graphics.text(font, shownName, fieldX + 2, fieldTop + 3, COLOR_ROW_LABEL, true);
+		int caretX = fieldX + 2 + font.width(shownName);
+		graphics.fill(caretX + 1, fieldTop + 2, caretX + 2, fieldTop + ROW_HEIGHT - 2,
+				COLOR_ROW_LABEL);
+
+		// Типы сообщений с галочками — тот самый список для выбора.
+		for (int i = 0; i < all.length; i++) {
+			MessageCategory category = all[i];
+			int top = rowTop(panelY, i + 1);
+			boolean on = editor.categories.contains(category);
+			drawCheckbox(graphics, panelX + PADDING, top + (ROW_HEIGHT - BOX_SIZE) / 2, on);
+			graphics.text(font, category.displayName(), panelX + PADDING + BOX_SIZE + 6, top + 3,
+					on ? COLOR_ROW_LABEL : COLOR_ROW_DIM, true);
+		}
+
+		int buttonTop = panelY + panelH - FOOTER_HEIGHT + 4;
+		graphics.text(font, "ЛКМ по типу — вкл/выкл", panelX + PADDING, buttonTop, COLOR_FOOTER,
+				false);
+		graphics.text(font, "[Готово]", panelX + PANEL_WIDTH - PADDING - 50, buttonTop,
+				COLOR_BOX_ON, true);
+	}
+
+	/** Квадрат с галочкой: зелёный и с отметкой — включено. */
+	private void drawCheckbox(GuiGraphicsExtractor graphics, int x, int y, boolean on) {
+		graphics.fill(x, y, x + BOX_SIZE, y + BOX_SIZE, on ? COLOR_BOX_ON : COLOR_BOX_OFF);
+		if (on) {
+			graphics.fill(x + 2, y + 2, x + BOX_SIZE - 2, y + BOX_SIZE - 2, COLOR_BOX_MARK);
+		}
+	}
+
+	private void outline(GuiGraphicsExtractor graphics, int x, int y, int w, int h) {
+		graphics.fill(x, y, x + w, y + 1, COLOR_PANEL_BORDER);
+		graphics.fill(x, y + h - 1, x + w, y + h, COLOR_PANEL_BORDER);
+		graphics.fill(x, y, x + 1, y + h, COLOR_PANEL_BORDER);
+		graphics.fill(x + w - 1, y, x + w, y + h, COLOR_PANEL_BORDER);
+	}
+
+	/** Подпись типов сообщений вкладки для строки списка. */
+	private static String summaryOf(ChatTab tab) {
+		if (tab.categoryCount() == MessageCategory.values().length) {
+			return "все сообщения";
+		}
+		if (tab.categoryCount() == 0) {
+			return "пусто";
+		}
+		StringBuilder out = new StringBuilder();
+		for (MessageCategory category : MessageCategory.values()) {
+			if (tab.has(category)) {
+				if (out.length() > 0) {
+					out.append(", ");
+				}
+				out.append(category.shortLabel());
+			}
+		}
+		return out.toString();
+	}
+
+	/** Обрезает подпись до ширины, которая влезает в отведённое место. */
+	private String trim(String text, int fromX, int toX) {
+		int room = toX - fromX;
+		if (room <= 0) {
+			return "";
+		}
+		if (font.width(text) <= room) {
+			return text;
+		}
+		String cut = text;
+		while (cut.length() > 1 && font.width(cut + "…") > room) {
+			cut = cut.substring(0, cut.length() - 1);
+		}
+		return cut + "…";
+	}
+
+	// --- ввод ---------------------------------------------------------------
+
 	@Override
 	public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick) {
-		ChatChannel[] rows = rows();
-		int index = indexAt((int) event.y(), rows.length);
-		if (index < 0) {
-			return super.mouseClicked(event, doubleClick);
-		}
-		mouseX = (int) event.x();
-		mouseY = (int) event.y();
+		int x = (int) event.x();
+		int y = (int) event.y();
+		return editor == null ? clickInList(x, y) : clickInEditor(x, y);
+	}
 
-		int boxX = panelX + PANEL_WIDTH - PADDING - BOX_SIZE;
-		if (event.x() >= boxX - 2) {
-			toggle(index, rows);
+	private boolean clickInList(int x, int y) {
+		if (x < panelX || x > panelX + PANEL_WIDTH) {
+			return false;
+		}
+		int row = (y - panelY - HEADER_HEIGHT) / (ROW_HEIGHT + ROW_GAP);
+		int top = rowTop(panelY, row);
+		if (row < 0 || y < top || y >= top + ROW_HEIGHT) {
+			return false;
+		}
+		if (row == newRowIndex()) {
+			openEditor(null);
 			return true;
 		}
+		if (row == resetRowIndex()) {
+			config.resetToDefaults();
+			afterChange();
+			return true;
+		}
+		List<ChatTab> tabs = config.tabs();
+		if (row >= tabs.size()) {
+			return false;
+		}
+		ChatTab tab = tabs.get(row);
 
-		// 🔧 всегда в конце и не двигается: нажатие на неё ничего не делает.
-		armedFrom = rows[index] == ChatChannel.SETTINGS ? -1 : index;
-		dragFrom = -1;
-		dragTo = -1;
+		switch (slotAt(x - panelX)) {
+			case SLOT_DELETE -> {
+				// У основной вкладки крестика нет — и удалить её нельзя.
+				if (config.removeTab(tab)) {
+					ChatRouter.getInstance().store().forget(tab);
+					afterChange();
+				}
+				return true;
+			}
+			case SLOT_EYE -> {
+				tab.setVisible(!tab.isVisible());
+				config.save();
+				afterChange();
+				return true;
+			}
+			case SLOT_HANDLE -> {
+				armedFrom = row;
+				dragFrom = -1;
+				dragTo = -1;
+				return true;
+			}
+			default -> {
+				openEditor(tab);
+				return true;
+			}
+		}
+	}
+
+	private boolean clickInEditor(int x, int y) {
+		MessageCategory[] all = MessageCategory.values();
+		int panelH = panelHeight(all.length + 1);
+
+		// «Готово» — в правом нижнем углу окна.
+		if (y >= panelY + panelH - FOOTER_HEIGHT && x >= panelX + PANEL_WIDTH - PADDING - 56) {
+			applyEditor();
+			return true;
+		}
+		int row = (y - panelY - HEADER_HEIGHT) / (ROW_HEIGHT + ROW_GAP);
+		int top = rowTop(panelY, row);
+		// Строка 0 — имя вкладки, дальше типы сообщений.
+		if (row < 1 || row > all.length || y < top || y >= top + ROW_HEIGHT) {
+			return false;
+		}
+		MessageCategory category = all[row - 1];
+		// remove возвращает false, если галочки не было, — тогда её ставим.
+		if (!editor.categories.remove(category)) {
+			editor.categories.add(category);
+		}
 		return true;
 	}
 
-	/**
-	 * Движение с зажатой кнопкой: перетаскиваемая строка едет за курсором.
-	 *
-	 * <p>Строка взводится в {@link #armedFrom} на нажатии, а в перетаскивание
-	 * входит только здесь — по первому же смещению. {@link TabSettings#moveChannel(int, int)}
-	 * вызывается на отпускании, а не здесь: иначе список дёргался бы под курсором.
-	 */
+	private void openEditor(ChatTab tab) {
+		editor = new Edit(tab);
+		dragFrom = -1;
+		armedFrom = -1;
+	}
+
 	@Override
 	public boolean mouseDragged(MouseButtonEvent event, double dragX, double dragY) {
-		if (armedFrom < 0) {
+		if (editor != null || armedFrom < 0) {
 			return super.mouseDragged(event, dragX, dragY);
 		}
 		if (dragFrom < 0) {
@@ -209,186 +451,104 @@ public final class TabSettingsScreen extends Screen {
 		}
 		mouseX = (int) event.x();
 		mouseY = (int) event.y();
-		int count = rows().length;
-		int over = indexAt(mouseY, count);
-		dragTo = over < 0 ? dragFrom : over;
+		int over = (mouseY - panelY - HEADER_HEIGHT) / (ROW_HEIGHT + ROW_GAP);
+		int limit = config.tabs().size() - 1;
+		dragTo = over < 0 || over > limit ? dragFrom : over;
 		return true;
 	}
 
-	/** Отпускание: роняет строку на новое место, если её тянули. */
 	@Override
 	public boolean mouseReleased(MouseButtonEvent event) {
 		int armed = armedFrom;
 		armedFrom = -1;
-		if (armed < 0) {
+		if (editor != null || armed < 0) {
 			return super.mouseReleased(event);
 		}
 		if (dragFrom < 0) {
-			// Кнопку нажали и отпустили без смещения — это обычный клик по строке.
-			toggle(armed, rows());
 			return true;
 		}
-		boolean changed = settings.moveChannel(dragFrom, dragTo);
+		config.move(dragFrom, dragTo);
 		dragFrom = -1;
 		dragTo = -1;
-		if (changed) {
-			// Полоску вкладок пересобирать не нужно: она читает порядок из
-			// настроек при каждом отрисовке, поэтому новый порядок виден сразу.
-			ChatTabFilter.getInstance().rebuild();
-		}
+		afterChange();
 		return true;
 	}
 
-	/**
-	 * Индекс строки под координатой {@code y} или {@code -1}, если мимо.
-	 *
-	 * <p>Строки идут сверху вниз в том же порядке, в каком рисуются, поэтому
-	 * попадание считается от верха списка, а не от курсора над названием.
-	 */
-	private int indexAt(int y, int rowCount) {
-		int listTop = panelY + HEADER_HEIGHT;
-		int listHeight = rowCount * (ROW_HEIGHT + ROW_GAP);
-		if (y < listTop || y >= listTop + listHeight) {
-			return -1;
+	@Override
+	public boolean charTyped(CharacterEvent event) {
+		if (editor != null && event.isAllowedChatCharacter()) {
+			// Курсор всегда в конце: этого достаточно для имени вкладки, а
+			// полноценный текстовый редактор здесь был бы лишним весом.
+			editor.name.append(event.codepointAsString());
+			return true;
 		}
-		// Шаг по ROW_GAP такой же, как в rowY: иначе попадание в строки
-		// копилось бы на полпикселя и кликал бы не по той вкладке.
-		return (y - listTop) / (ROW_HEIGHT + ROW_GAP);
+		return super.charTyped(event);
 	}
 
-	/**
-	 * Рисует одну строку меню: ручка перетаскивания, название, бокс с галочкой.
-	 *
-	 * @param y верх строки
-	 */
-	private void drawRow(GuiGraphicsExtractor graphics, ChatChannel channel, int y,
-			boolean configurable, boolean enabled) {
-		int labelY = y + (ROW_HEIGHT - font.lineHeight) / 2 + 1;
-		int boxX = panelX + PANEL_WIDTH - PADDING - BOX_SIZE;
-		int boxY = y + (ROW_HEIGHT - BOX_SIZE) / 2;
-
-		drawHandle(graphics, y, channel != ChatChannel.SETTINGS);
-
-		graphics.text(font, channel.displayName(), panelX + PADDING + HANDLE_WIDTH, labelY,
-				COLOR_ROW_LABEL, true);
-
-		// 🔧 всегда включена: показываем её, но галочку не даём снять.
-		if (configurable) {
-			drawBox(graphics, boxX, boxY, enabled);
-		} else {
-			graphics.fill(boxX, boxY, boxX + BOX_SIZE, boxY + BOX_SIZE, COLOR_BOX_ON);
-			graphics.text(font, "всегда", boxX - font.width("всегда") - 4,
-					labelY, COLOR_FOOTER, true);
+	@Override
+	public boolean keyPressed(KeyEvent event) {
+		if (editor == null) {
+			return super.keyPressed(event);
 		}
-	}
-
-	/**
-	 * Ручка перетаскивания слева: две точечные полоски, как у ползунка.
-	 *
-	 * <p>У служебной 🔧 ручки нет: её нельзя двигать, и показывать значку,
-	 * который ничего не делает, незачем.
-	 */
-	private void drawHandle(GuiGraphicsExtractor graphics, int rowY, boolean movable) {
-		if (!movable) {
-			return;
-		}
-		int x = panelX + PADDING;
-		int top = rowY + 3;
-		for (int i = 0; i < 3; i++) {
-			graphics.fill(x, top + i * 3, x + 2, top + i * 3 + 1, COLOR_HANDLE);
-			graphics.fill(x + 3, top + i * 3, x + 5, top + i * 3 + 1, COLOR_HANDLE);
-		}
-	}
-
-	/** Рамка из полосок в один пиксель. */
-	private void outline(GuiGraphicsExtractor graphics, int x, int y, int w, int h) {
-		graphics.fill(x, y, x + w, y + 1, COLOR_PANEL_BORDER);
-		graphics.fill(x, y + h - 1, x + w, y + h, COLOR_PANEL_BORDER);
-		graphics.fill(x, y, x + 1, y + h, COLOR_PANEL_BORDER);
-		graphics.fill(x + w - 1, y, x + w, y + h, COLOR_PANEL_BORDER);
-	}
-
-	/**
-	 * Бокс с галочкой.
-	 *
-	 * <p>Галочку рисуем двумя полосками, а не символом шрифта: в Minecraft нет
-	 * галочки в основном начертании, а свой глиф в атласе шрифта есть не всегда.
-	 */
-	private void drawBox(GuiGraphicsExtractor graphics, int x, int y, boolean enabled) {
-		graphics.fill(x, y, x + BOX_SIZE, y + BOX_SIZE, enabled ? COLOR_BOX_ON : COLOR_BOX_OFF);
-		outline(graphics, x, y, BOX_SIZE, BOX_SIZE);
-		if (enabled) {
-			// Две диагональные полоски — короткая и длинная часть галочки.
-			graphics.fill(x + 2, y + 5, x + 4, y + 6, COLOR_BOX_MARK);
-			graphics.fill(x + 3, y + 4, x + 5, y + 6, COLOR_BOX_MARK);
-			graphics.fill(x + 4, y + 3, x + 7, y + 4, COLOR_BOX_MARK);
-			graphics.fill(x + 5, y + 2, x + 8, y + 3, COLOR_BOX_MARK);
-		}
-	}
-
-	private void toggle(int index, ChatChannel[] rows) {
-		ChatChannel channel = rows[index];
-		if (!settings.isConfigurable(channel)) {
-			return;
-		}
-		boolean nowEnabled = settings.toggle(channel);
-		ChatTabsMod.logger().debug("Вкладка {} {}", channel.displayName(),
-				nowEnabled ? "включена" : "выключена");
-		// Чат могло попасть в только что погашенную вкладку — активной должна
-		// остаться видимая, иначе игрок останется в несуществующей вкладке.
-		if (!settings.isEnabled(ChatRouter.getInstance().activeTab())) {
-			ChatChannel[] visible = settings.visibleChannels();
-			if (visible.length > 0) {
-				ChatRouter.getInstance().select(visible[0]);
+		int key = event.key();
+		if (key == InputConstants.KEY_BACKSPACE) {
+			if (!editor.name.isEmpty()) {
+				editor.name.deleteCharAt(editor.name.length() - 1);
 			}
+			return true;
 		}
-		// Пересобираем чат: список видимых строк зависит от активной вкладки.
-		ChatTabFilter.getInstance().rebuild();
+		if (key == InputConstants.KEY_RETURN) {
+			applyEditor();
+			return true;
+		}
+		return super.keyPressed(event);
 	}
 
-	/**
-	 * Каналы в порядке показа в меню — тот же, что и в полоске вкладок.
-	 *
-	 * <p>Список, а не {@link ChatChannel#values()}: иначе перетаскивание было бы
-	 * без толку — на экране вкладки шли бы в порядке объявления констант.
-	 * Выключенные вкладки тоже в списке: их надо куда-то возвращать.
-	 */
-	static ChatChannel[] rows() {
-		return TabSettings.getInstance().orderedChannels();
-	}
-
-	private boolean hovered(int index, int count) {
-		int rowY = rowY(index);
-		return mouseX >= panelX + 1 && mouseX < panelX + PANEL_WIDTH - 1
-				&& mouseY >= rowY && mouseY < rowY + ROW_HEIGHT;
-	}
-
-	private int rowY(int index) {
-		return panelY + HEADER_HEIGHT + index * (ROW_HEIGHT + ROW_GAP);
-	}
-
-	private static int layoutHeight() {
-		return HEADER_HEIGHT + rows().length * (ROW_HEIGHT + ROW_GAP) + FOOTER_HEIGHT;
-	}
-
-	/**
-	 * Положение окна — по центру экрана.
-	 *
-	 * <p>Вынесено отдельно и без зависимостей от GUI: иначе геометрию было бы
-	 * нечем проверить без запуска игры.
-	 */
-	void layout(int screenWidth, int screenHeight) {
-		panelX = (screenWidth - PANEL_WIDTH) / 2;
-		panelY = Math.max(4, (screenHeight - layoutHeight()) / 2);
+	/** Применяет редактор: создаёт вкладку или сохраняет правки существующей. */
+	private void applyEditor() {
+		if (editor == null) {
+			return;
+		}
+		String name = editor.name.toString().trim();
+		if (name.isEmpty()) {
+			// Без имени вкладку не отличить от соседней, поэтому пустое не сохраняем.
+			return;
+		}
+		if (editor.isNew()) {
+			ChatTab created = config.addTab(name, editor.categories);
+			if (created == null) {
+				ChatTabsMod.logger().warn("Больше {} вкладок не завести", TabConfig.MAX_TABS);
+				return;
+			}
+		} else {
+			editor.target.setName(name);
+			for (MessageCategory category : MessageCategory.values()) {
+				editor.target.setCategory(category, editor.categories.contains(category));
+			}
+			config.save();
+		}
+		editor = null;
+		afterChange();
 	}
 
 	@Override
 	public boolean shouldCloseOnEsc() {
-		return true;
+		// В редакторе Esc закрывает редактор, а не всё меню: иначе набранное имя
+		// и отмеченные типы терялись бы целиком.
+		return editor == null;
 	}
 
 	@Override
-	public boolean isPauseScreen() {
-		return false;
+	public void onClose() {
+		if (editor != null) {
+			editor = null;
+			return;
+		}
+		super.onClose();
+	}
+
+	/** Пересобирает чат: изменения вкладок сразу видно в самом чате. */
+	private void afterChange() {
+		ChatTabFilter.getInstance().rebuild();
 	}
 }

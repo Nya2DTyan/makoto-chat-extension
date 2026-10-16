@@ -66,6 +66,9 @@ public final class TabOverlay {
 	 */
 	private static final int CHAT_FADE_TICKS = 200;
 
+	/** Подпись служебной ячейки — входа в меню настроек. */
+	static final String TAB_SETTINGS_LABEL = "🔧";
+
 	/** Цвет подписи активной вкладки: ARGB, альфа обязательна. */
 	static final int TAB_TEXT_ACTIVE = 0xFFFFFFFF;
 
@@ -232,6 +235,10 @@ public final class TabOverlay {
 	/**
 		 * Рисует полоску и запоминает геометрию для проверки попаданий.
 		 *
+		 * <p>Вкладки берутся из настройки игрока ({@link TabConfig}), а не из
+		 * перечисления категорий: их можно добавлять, удалять и переименовывать.
+		 * Последняя ячейка полоски — не вкладка, а вход в меню настроек (🔧).
+		 *
 		 * @param fade видимость чата 0..1 — на неё умножается альфа всех цветов,
 		 *     чтобы вкладки гасли ровно вместе с чатом
 		 */
@@ -239,18 +246,15 @@ public final class TabOverlay {
 			ChatRouter router = ChatRouter.getInstance();
 			int x = MARGIN_X;
 
-			// Рисуем только видимые вкладки: выключенная галочкой не должна
-			// занимать место в полоске и попадать в переключение по кругу.
-			ChatChannel[] channels = TabSettings.getInstance().visibleChannels();
-			for (int i = 0; i < channels.length; i++) {
-				ChatChannel channel = channels[i];
-				boolean active = channel == router.activeTab();
-				int unread = router.store().unreadCount(channel);
+			// Рисуем только видимые вкладки: скрытая не должна занимать место
+			// в полоске и попадать в переключение по кругу.
+			List<ChatTab> tabs = barTabs();
+			for (int i = 0; i < tabs.size(); i++) {
+				ChatTab tab = tabs.get(i);
+				boolean active = tab == router.activeTab();
+				int unread = router.store().unreadCount(tab, router.activeTab());
 
-				String label = unread > 0
-						? channel.tabLabel() + " " + unread
-						: channel.tabLabel();
-
+				String label = unread > 0 ? tab.label() + " " + unread : tab.label();
 				int width = font.width(label) + 8;
 
 				// Активная вкладка — светлее и непрозрачнее, остальные приглушены.
@@ -263,13 +267,30 @@ public final class TabOverlay {
 				graphics.text(font, label, x + 4, y + 2,
 						withAlpha(active ? TAB_TEXT_ACTIVE : TAB_TEXT_INACTIVE, fade), true);
 
-				BOX_X[i] = x;
-				BOX_Y[i] = y;
-				BOX_W[i] = width;
-				BOX_H[i] = BAR_HEIGHT;
-
+				remember(i, x, y, width);
 				x += width + TAB_GAP;
 			}
+
+			// 🔧 — служебная ячейка, она не бывает активной вкладкой.
+			int settingsWidth = font.width(TAB_SETTINGS_LABEL) + 8;
+			graphics.fill(x, y, x + settingsWidth, y + BAR_HEIGHT, withAlpha(TAB_BG_INACTIVE, fade));
+			graphics.text(font, TAB_SETTINGS_LABEL, x + 4, y + 2, withAlpha(TAB_TEXT_INACTIVE, fade), true);
+			remember(tabs.size(), x, y, settingsWidth);
+		}
+
+		/** Запоминает прямоугольник ячейки полоски — для проверки попаданий клика. */
+		private static void remember(int slot, int x, int y, int width) {
+			if (slot < MAX_TRACKED_CHANNELS) {
+				BOX_X[slot] = x;
+				BOX_Y[slot] = y;
+				BOX_W[slot] = width;
+				BOX_H[slot] = BAR_HEIGHT;
+			}
+		}
+
+		/** Видимые вкладки в порядке полоски. */
+		static List<ChatTab> barTabs() {
+			return TabConfig.getInstance().visibleTabs();
 		}
 
 		/** Рисует полоску с полной видимостью — в открытом чате, где гасить нечего. */
@@ -290,21 +311,19 @@ public final class TabOverlay {
 			return (alpha << 24) | (argb & 0x00FFFFFF);
 		}
 
-	/** Заполняет прямоугольники вкладок без отрисовки — для проверки клика. */
+	/** Заполняет прямоугольники ячеек без отрисовки — для проверки клика. */
 	private static void build(Font font, int y) {
 		int x = MARGIN_X;
-		ChatChannel[] channels = TabSettings.getInstance().visibleChannels();
-		for (int i = 0; i < channels.length; i++) {
-			int unread = ChatRouter.getInstance().store().unreadCount(channels[i]);
-			String label = unread > 0 ? channels[i].tabLabel() + " " + unread : channels[i].tabLabel();
+		List<ChatTab> tabs = barTabs();
+		for (int i = 0; i < tabs.size(); i++) {
+			ChatTab tab = tabs.get(i);
+			int unread = ChatRouter.getInstance().store().unreadCount(tab, ChatRouter.getInstance().activeTab());
+			String label = unread > 0 ? tab.label() + " " + unread : tab.label();
 
-			BOX_X[i] = x;
-			BOX_Y[i] = y;
-			BOX_W[i] = font.width(label) + 8;
-			BOX_H[i] = BAR_HEIGHT;
-
+			remember(i, x, y, font.width(label) + 8);
 			x += BOX_W[i] + TAB_GAP;
 		}
+		remember(tabs.size(), x, y, font.width(TAB_SETTINGS_LABEL) + 8);
 	}
 
 	/**
@@ -344,28 +363,53 @@ public final class TabOverlay {
 	/**
 	 * Выбирает вкладку по координатам клика.
 	 *
-	 * @return {@code true}, если клик попал во вкладку и она была выбрана
+	 * <p>Клик по последней ячейке (🔧) не переключает вкладку, а открывает меню
+	 * настроек: там вкладки добавляют, переименовывают и настраивают их
+	 * категории, и это единственный вход в него.
+	 *
+	 * @return {@code true}, если клик попал в полоску и был обработан
 	 */
 	public static boolean selectAt(int mouseX, int mouseY) {
-		ChatChannel[] channels = TabSettings.getInstance().visibleChannels();
-		for (int i = 0; i < channels.length; i++) {
-			if (mouseX >= BOX_X[i] && mouseX < BOX_X[i] + BOX_W[i]
-					&& mouseY >= BOX_Y[i] && mouseY < BOX_Y[i] + BOX_H[i]) {
-				ChatRouter.getInstance().select(channels[i]);
-				ChatTabsMod.logger().debug("Вкладка выбрана кликом: {}", channels[i].displayName());
+		List<ChatTab> tabs = barTabs();
+		for (int i = 0; i < tabs.size(); i++) {
+			if (hit(i, mouseX, mouseY)) {
+				ChatRouter.getInstance().select(tabs.get(i));
+				ChatTabsMod.logger().debug("Вкладка выбрана кликом: {}", tabs.get(i).name());
 				return true;
 			}
+		}
+		if (hit(tabs.size(), mouseX, mouseY)) {
+			Minecraft minecraft = ChatRouter.minecraft();
+			if (minecraft != null) {
+				minecraft.setScreenAndShow(new TabSettingsScreen());
+			}
+			return true;
 		}
 		return false;
 	}
 
-	/** Прямоугольники вкладок последнего кадра — для отладки и тестов. */
+	/** Попал ли клик в ячейку полоски с таким номером. */
+	private static boolean hit(int slot, int mouseX, int mouseY) {
+		return slot < MAX_TRACKED_CHANNELS
+				&& mouseX >= BOX_X[slot] && mouseX < BOX_X[slot] + BOX_W[slot]
+				&& mouseY >= BOX_Y[slot] && mouseY < BOX_Y[slot] + BOX_H[slot];
+	}
+
+	/**
+	 * Прямоугольники ячеек последнего кадра — для отладки и проверок.
+	 *
+	 * <p>Последний элемент — ячейка настроек, у неё пятое число равно
+	 * {@code -1}: вкладки с таким номером не существует, и проверка попаданий
+	 * этим и отличается.
+	 */
 	public static List<int[]> layout() {
 		List<int[]> boxes = new ArrayList<>();
-		ChatChannel[] channels = TabSettings.getInstance().visibleChannels();
-		for (int i = 0; i < channels.length; i++) {
-			boxes.add(new int[] {BOX_X[i], BOX_Y[i], BOX_W[i], BOX_H[i], channels[i].ordinal()});
+		List<ChatTab> tabs = barTabs();
+		for (int i = 0; i < tabs.size(); i++) {
+			boxes.add(new int[] {BOX_X[i], BOX_Y[i], BOX_W[i], BOX_H[i], i});
 		}
+		boxes.add(new int[] {BOX_X[tabs.size()], BOX_Y[tabs.size()], BOX_W[tabs.size()],
+				BOX_H[tabs.size()], -1});
 		return boxes;
 	}
 }

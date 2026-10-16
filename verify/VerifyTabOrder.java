@@ -1,19 +1,27 @@
+import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.net.URL;
 import java.net.URLClassLoader;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.EnumSet;
+import java.util.List;
+import java.util.Set;
 
 /**
- * Проверка порядка вкладок и перетаскивания в меню настроек на собранном jar.
+ * Проверка вкладок игрока на собранном jar: добавление, удаление,
+ * переименование, категории и сохранение в файл.
  *
- * <p>Случаи, из-за которых написаны проверки:
+ * <p>Случаи, из-за которых написана проверка:
  * <ul>
- *   <li>порядок вкладок хранился во множестве {@code Set}, которое порядок не
- *       помнит: перетаскивание было бы негде хранить, а {@code visibleChannels()}
- *       возвращал бы вкладки в порядке объявления констант;
- *   <li>служебная 🔧 всегда должна быть последней — иначе её можно было бы
- *       утащить вверх и потерять кнопку настроек в привычном месте;
- *   <li>переключение по кругу должно идти по новому порядку, а не по
- *       {@code values()}: иначе курсор прыгал бы через выключенные вкладки.
+ *   <li>вкладка была жёстко привязана к каналу, и убрать тип сообщений из
+ *       «Общего» было нельзя — теперь вкладка это набор категорий, и проверяется,
+ *       что снятая категория действительно перестаёт в неё попадать;</li>
+ *   <li>основную вкладку нельзя удалить — иначе в чате стало бы не видно всё
+ *       остальное;</li>
+ *   <li>вкладки с именем игрока должны переживать перезапуск, поэтому файл
+ *       конфигурации проверяется записью и чтением.</li>
  * </ul>
  */
 public class VerifyTabOrder {
@@ -25,131 +33,217 @@ public class VerifyTabOrder {
 		URL modJar = new java.io.File(args[0]).toURI().toURL();
 		try (URLClassLoader loader = new URLClassLoader(new URL[] {modJar},
 				VerifyTabOrder.class.getClassLoader())) {
-			Class<?> settingsClass = loader.loadClass("nya2dtyan.makotochat.TabSettings");
-			Class<?> channelClass = loader.loadClass("nya2dtyan.makotochat.ChatChannel");
-			Class<?> screenClass = loader.loadClass("nya2dtyan.makotochat.TabSettingsScreen");
 
-			Method getInstance = settingsClass.getMethod("getInstance");
-			Object settings = getInstance.invoke(null);
-			Method orderedChannels = settingsClass.getMethod("orderedChannels");
-			Method visibleChannels = settingsClass.getMethod("visibleChannels");
-			Method moveChannel = settingsClass.getMethod("moveChannel", int.class, int.class);
-			Method cycle = settingsClass.getMethod("cycle", channelClass, int.class);
-			Method setEnabled = settingsClass.getMethod("setEnabled", channelClass, boolean.class);
-			Method isEnabled = settingsClass.getMethod("isEnabled", channelClass);
+			Class<?> configClass = loader.loadClass("nya2dtyan.makotochat.TabConfig");
+			Class<?> tabClass = loader.loadClass("nya2dtyan.makotochat.ChatTab");
+			Class<?> categoryClass = loader.loadClass("nya2dtyan.makotochat.MessageCategory");
+			Object config = configClass.getMethod("getInstance").invoke(null);
 
-			Object settingsTab = enumOf(channelClass, "SETTINGS");
-			Object[] all = (Object[]) orderedChannels.invoke(settings);
+			Method tabs = configClass.getMethod("tabs");
+			Method visibleTabs = configClass.getMethod("visibleTabs");
+			Method addTab = configClass.getMethod("addTab", String.class, Set.class);
+			Method removeTab = configClass.getMethod("removeTab", tabClass);
+			Method move = configClass.getMethod("move", int.class, int.class);
+			Method mainTab = configClass.getMethod("mainTab");
+			Method activeTab = configClass.getMethod("activeTab");
+			Method setActiveTab = configClass.getMethod("setActiveTab", tabClass);
+			Method resetToDefaults = configClass.getMethod("resetToDefaults");
 
-			check("в настройках ровно столько же вкладок, сколько каналов", all.length
-					== channelClass.getEnumConstants().length);
-			check("🔧 по умолчанию последняя", all[all.length - 1] == settingsTab);
-			check("порядок по умолчанию совпадает с порядком констант",
-					java.util.Arrays.equals(all, channelClass.getEnumConstants()));
+			Method name = tabClass.getMethod("name");
+			Method categories = tabClass.getMethod("categories");
+			Method has = tabClass.getMethod("has", categoryClass);
+			Method setCategory = tabClass.getMethod("setCategory", categoryClass, boolean.class);
+			Method setName = tabClass.getMethod("setName", String.class);
+			Method isMain = tabClass.getMethod("isMain");
+			Method isVisible = tabClass.getMethod("isVisible");
+			Method setVisible = tabClass.getMethod("setVisible", boolean.class);
+			Method showsAny = tabClass.getMethod("showsAny", Set.class);
 
-			// Перенос первой вкладки в середину: снятая со места вкладка
-			// встаёт ровно на целевой индекс, а бывшие соседи сдвигаются.
-			Object firstBefore = all[0];
-			Object secondBefore = all[1];
-			Object thirdBefore = all[2];
-			check("перенос меняет порядок", Boolean.TRUE.equals(moveChannel.invoke(settings, 0, 1)));
-			Object[] after = (Object[]) orderedChannels.invoke(settings);
-			check("перенесённая вкладка встала на целевой индекс", after[1] == firstBefore);
-			check("бывшая вторая сдвинулась вверх", after[0] == secondBefore);
-			check("остальные не сдвинулись", after[2] == thirdBefore);
-			check("🔧 осталась последней", after[after.length - 1] == settingsTab);
+			// --- вкладки по умолчанию -------------------------------------
+			resetToDefaults.invoke(config);
+			List<?> defaults = (List<?>) tabs.invoke(config);
+			check("вкладок по умолчанию столько же, сколько было раньше (7)",
+					defaults.size() == 7);
+			check("основная вкладка называется «Общий»",
+					"Общий".equals(name.invoke(mainTab.invoke(config))));
+			check("основная вкладка помечена как основная",
+					(boolean) isMain.invoke(mainTab.invoke(config)));
+			check("основная вкладка содержит все типы сообщений",
+					((Set<?>) categories.invoke(mainTab.invoke(config))).size()
+							== categoryClass.getEnumConstants().length);
+			check("все вкладки по умолчанию видимы",
+					visibleTabs.invoke(config).equals(tabs.invoke(config)));
 
-			// 🔧 двигать нельзя.
-			int last = after.length - 1;
-			check("🔧 не переносится вверх",
-					!Boolean.TRUE.equals(moveChannel.invoke(settings, last, 0)));
-			Object[] unchanged = (Object[]) orderedChannels.invoke(settings);
-			check("после попытки порядок не изменился",
-					java.util.Arrays.equals(unchanged, after));
+			// --- главное требование: категория убирается из «Общего» --------
+			Object tickets = enumConstant(categoryClass, "TICKETS");
+			Object main = mainTab.invoke(config);
+			Object ticketsTab = findTab(tabs, name, "Тикеты", config);
+			check("есть вкладка «Тикеты»", ticketsTab != null);
 
-			// Нельзя выйти за границы списка.
-			check("перенос за пределы списка отклоняется",
-					!Boolean.TRUE.equals(moveChannel.invoke(settings, 0, after.length + 5)));
-			check("перенос на себя же — не изменение",
-					!Boolean.TRUE.equals(moveChannel.invoke(settings, 0, 0)));
-			check("перенос с некорректным индексом отклоняется",
-					!Boolean.TRUE.equals(moveChannel.invoke(settings, -1, 2)));
+			Object ticketMessage = enumSet(categoryClass, tickets);
+			check("до правки тикет виден в «Общем»", (boolean) showsAny.invoke(main, ticketMessage));
+			check("и в своей вкладке", (boolean) showsAny.invoke(ticketsTab, ticketMessage));
 
-			// Возврат как было.
-			moveChannel.invoke(settings, 1, 0);
-			Object[] restored = (Object[]) orderedChannels.invoke(settings);
-			check("обратный перенос вернул исходный порядок",
-					java.util.Arrays.equals(restored, channelClass.getEnumConstants()));
+			setCategory.invoke(main, tickets, false);
+			check("после снятия галочки тикет исчез из «Общего»",
+					!(boolean) showsAny.invoke(main, ticketMessage));
+			check("но остался во вкладке «Тикеты»",
+					(boolean) showsAny.invoke(ticketsTab, ticketMessage));
+			check("остальные типы сообщений в «Общем» не задеты",
+					(boolean) showsAny.invoke(main, enumSet(categoryClass,
+							enumConstant(categoryClass, "DIRECT"))));
 
-			// visibleChannels идёт по тому же порядку и пропускает выключенные.
-			Object off = all[2];
-			setEnabled.invoke(settings, off, false);
-			Object[] visible = (Object[]) visibleChannels.invoke(settings);
-			boolean found = false;
-			for (Object v : visible) {
-				if (v == off) {
-					found = true;
-				}
-			}
-			check("выключенная вкладка исчезает из полоски", !found);
-			check("выключенная остаётся в списке меню",
-					contains((Object[]) orderedChannels.invoke(settings), off));
-			check("🔧 видна всегда", contains(visible, settingsTab));
-			setEnabled.invoke(settings, off, true);
-			check("после обратного переключения видна снова",
-					contains((Object[]) visibleChannels.invoke(settings), off));
+			// --- своя вкладка ----------------------------------------------
+			Object direct = enumConstant(categoryClass, "DIRECT");
+			Object created = addTab.invoke(config, "Мои ЛС", enumSet(categoryClass, direct, tickets));
+			check("вкладка создаётся", created != null);
+			check("её название сохраняется", "Мои ЛС".equals(name.invoke(created)));
+			check("в неё попадает выбранный тип сообщений",
+					(boolean) showsAny.invoke(created, enumSet(categoryClass, direct)));
+			check("и второй выбранный тип",
+					(boolean) showsAny.invoke(created, ticketMessage));
+			check("а невыбранный не попадает",
+					!(boolean) showsAny.invoke(created, enumSet(categoryClass,
+							enumConstant(categoryClass, "CITY"))));
+			check("новая вкладка видна в полоске",
+					((List<?>) visibleTabs.invoke(config)).contains(created));
 
-			// Переключение по кругу идёт по порядку игрока.
-			Object first = all[0];
-			Object secondAgain = all[1];
-			check("цикл идёт по порядку настроек, а не по values()",
-					cycle.invoke(settings, first, 1) == secondAgain);
-			check("цикл назад",
-					cycle.invoke(settings, secondAgain, -1) == first);
-			check("цикл заворачивается",
-					cycle.invoke(settings, all[all.length - 1], 1) == all[0]);
+			// --- переименование --------------------------------------------
+			setName.invoke(created, "Торговля");
+			check("вкладка переименовывается", "Торговля".equals(name.invoke(created)));
 
-			// Меню рисует тот же порядок, что и полоска.
-			Method rows = screenClass.getDeclaredMethod("rows");
-			rows.setAccessible(true);
-			Object[] menuRows = (Object[]) rows.invoke(null);
-			Object[] barRows = (Object[]) orderedChannels.invoke(settings);
-			check("меню и полоска в одном порядке", java.util.Arrays.equals(menuRows, barRows));
-			check("меню содержит 🔧 последней", menuRows[menuRows.length - 1] == settingsTab);
-			check("isEnabled(🔧) всегда истина", Boolean.TRUE.equals(isEnabled.invoke(settings, settingsTab)));
+			// --- скрытие ----------------------------------------------------
+			setVisible.invoke(created, false);
+			check("скрытая вкладка исчезает из полоски",
+					!((List<?>) visibleTabs.invoke(config)).contains(created));
+			check("но остаётся в списке настроек",
+					((List<?>) tabs.invoke(config)).contains(created));
 
-			System.out.printf("%nИТОГО: успешно %d, провалено %d%n", pass, fail);
+			// Переключение работает только по видимым вкладкам.
+			setActiveTab.invoke(config, created);
+			check("скрытую вкладку нельзя сделать активной",
+					activeTab.invoke(config) != created);
+			setVisible.invoke(created, true);
+
+			// --- удаление ---------------------------------------------------
+			check("своя вкладка удаляется", (boolean) removeTab.invoke(config, created));
+			check("удалённой вкладки больше нет в списке",
+					!((List<?>) tabs.invoke(config)).contains(created));
+			check("основную вкладку удалить нельзя",
+					!(boolean) removeTab.invoke(config, mainTab.invoke(config)));
+			check("основная вкладка на месте",
+					"Общий".equals(name.invoke(mainTab.invoke(config))));
+
+			// --- перестановка ----------------------------------------------
+			resetToDefaults.invoke(config);
+			List<?> before = new ArrayList<>((List<?>) tabs.invoke(config));
+			check("перестановка вкладок работает", (boolean) move.invoke(config, 1, 3));
+			List<?> after = new ArrayList<>((List<?>) tabs.invoke(config));
+			check("первая вкладка осталась первой", after.get(0) == before.get(0));
+			check("переставленная вкладка встала на новое место", after.get(3) == before.get(1));
+			check("основную вкладку переставить нельзя", !(boolean) move.invoke(config, 0, 2));
+
+			// --- сохранение в файл -------------------------------------------
+			verifyFile(loader, configClass, tabClass, categoryClass, config, tickets);
+
+			System.out.println();
+			System.out.println("ИТОГО: успешно " + pass + ", провалено " + fail);
 			if (fail > 0) {
 				System.exit(1);
 			}
 		}
 	}
 
-	private static Object enumOf(Class<?> enumClass, String name) {
-		for (Object constant : enumClass.getEnumConstants()) {
-			if (((Enum<?>) constant).name().equals(name)) {
-				return constant;
+	/**
+	 * Проверяет, что вкладки переживают перезапуск: сохраняем, читаем файл
+	 * заново и сверяем названия и категории.
+	 */
+	private static void verifyFile(ClassLoader loader, Class<?> configClass, Class<?> tabClass,
+			Class<?> categoryClass, Object config, Object tickets) throws Exception {
+		Path temp = Files.createTempFile("makoto-tabs", ".json");
+		try {
+			Class<?> fileClass = loader.loadClass("nya2dtyan.makotochat.TabConfigFile");
+			Constructor<?> constructor = fileClass.getConstructor(Path.class);
+			Object storage = constructor.newInstance(temp);
+			configClass.getMethod("bindStorage", loader.loadClass("nya2dtyan.makotochat.TabConfig$Storage"))
+					.invoke(config, storage);
+
+			configClass.getMethod("resetToDefaults").invoke(config);
+			configClass.getMethod("addTab", String.class, Set.class)
+					.invoke(config, "Тикеты и ЛС", enumSet(categoryClass, tickets));
+
+			Object reread = constructor.newInstance(temp);
+			List<?> loaded = (List<?>) fileClass.getMethod("read").invoke(reread);
+			check("файл конфигурации прочитался", loaded != null && !loaded.isEmpty());
+			if (loaded == null) {
+				return;
 			}
+			Object restored = findTabByName(loaded, tabClass, "Тикеты и ЛС");
+			check("своя вкладка пережила перезапуск", restored != null);
+			if (restored != null) {
+				check("её категории сохранились",
+						(boolean) tabClass.getMethod("has", categoryClass).invoke(restored, tickets));
+			}
+			check("основная вкладка в файле одна",
+					countMain(loaded, tabClass) == 1);
+		} finally {
+			Files.deleteIfExists(temp);
 		}
-		throw new IllegalArgumentException("Нет канала " + name);
 	}
 
-	private static boolean contains(Object[] array, Object value) {
-		for (Object item : array) {
-			if (item == value) {
-				return true;
+	private static int countMain(List<?> tabs, Class<?> tabClass) throws Exception {
+		Method isMain = tabClass.getMethod("isMain");
+		int count = 0;
+		for (Object tab : tabs) {
+			if ((boolean) isMain.invoke(tab)) {
+				count++;
 			}
 		}
-		return false;
+		return count;
 	}
 
-	private static void check(String name, boolean ok) {
+	private static Object findTab(Method tabs, Method name, String wanted, Object config)
+			throws Exception {
+		return findTabByName((List<?>) tabs.invoke(config), null, wanted);
+	}
+
+	private static Object findTabByName(List<?> tabs, Class<?> tabClass, String wanted)
+			throws Exception {
+		for (Object tab : tabs) {
+			String value = (String) tab.getClass().getMethod("name").invoke(tab);
+			if (wanted.equals(value)) {
+				return tab;
+			}
+		}
+		return null;
+	}
+
+	private static Object enumConstant(Class<?> enumClass, String name) {
+		for (Object value : enumClass.getEnumConstants()) {
+			if (((Enum<?>) value).name().equals(name)) {
+				return value;
+			}
+		}
+		throw new IllegalArgumentException("нет константы " + name);
+	}
+
+	/** Набор категорий для проверки: то, что игрок отмечает галочками. */
+	@SuppressWarnings({"unchecked", "rawtypes"})
+	private static Set<Object> enumSet(Class<?> enumClass, Object... values) {
+		EnumSet set = EnumSet.noneOf((Class<Enum>) enumClass);
+		for (Object value : values) {
+			set.add((Enum) value);
+		}
+		return set;
+	}
+
+	private static void check(String what, boolean ok) {
 		if (ok) {
 			pass++;
-			System.out.println("  OK   " + name);
+			System.out.println("  OK   " + what);
 		} else {
 			fail++;
-			System.out.println("  FAIL " + name);
+			System.out.println("  FAIL " + what);
 		}
 	}
 }

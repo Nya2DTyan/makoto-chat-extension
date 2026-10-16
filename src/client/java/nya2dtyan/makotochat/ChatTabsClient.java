@@ -44,6 +44,10 @@ public class ChatTabsClient implements ClientModInitializer {
 	public void onInitializeClient() {
 		ChatRouter router = ChatRouter.getInstance();
 
+		// Вкладки читаем из файла раньше всего остального: их спрашивают и
+		// полоска, и фильтр чата, и настройки.
+		TabConfig.getInstance().bindStorage(new TabConfigFile());
+
 		// Тип клавиатуры не указываем: конструктор подставит его сам, и код
 		// остаётся общим для 26.2 и 26.3 (см. описание класса).
 		var category = ChatTabsMod.keyCategory();
@@ -94,8 +98,8 @@ public class ChatTabsClient implements ClientModInitializer {
 					// Без этой строки «мод не загрузился» и «вкладок не видно» выглядят одинаково.
 					client.gui.hud.getChat().addClientSystemMessage(
 							net.minecraft.network.chat.Component.literal(
-									"[Makoto Chat Extension] Общий / ЛС / Город / CO — вкладки под чатом. "
-											+ "Появляются при открытии чата (T); переключение кликом или клавишами."));
+									"[Makoto Chat Extension] Вкладки под чатом. В 🔧 можно завести свои вкладки "
+											+ "и выбрать, какие сообщения в них попадают."));
 
 					if (!ChatTabFilter.getInstance().isInstalled()) {
 						// Явный сигнал: вкладки нарисованы, но разделение чата не работает.
@@ -136,6 +140,6 @@ public class ChatTabsClient implements ClientModInitializer {
 
 	/** Статус для HUD: имя активной вкладки. */
 	public static net.minecraft.network.chat.Component overlayStatus() {
-		return net.minecraft.network.chat.Component.literal(ChatRouter.getInstance().activeTab().displayName());
+		return net.minecraft.network.chat.Component.literal(ChatRouter.getInstance().activeTab().name());
 	}
 }

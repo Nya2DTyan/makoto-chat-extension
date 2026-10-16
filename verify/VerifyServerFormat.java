@@ -21,7 +21,7 @@ public final class VerifyServerFormat {
 		try (URLClassLoader loader = new URLClassLoader(new URL[] {modJar},
 				VerifyServerFormat.class.getClassLoader())) {
 
-			Class<?> channelClass = loader.loadClass("nya2dtyan.makotochat.ChatChannel");
+			Class<?> channelClass = loader.loadClass("nya2dtyan.makotochat.MessageCategory");
 			Class<?> classifier = loader.loadClass("nya2dtyan.makotochat.MessageClassifier");
 			Method classify = classifier.getDeclaredMethod("classify", String.class, boolean.class);
 			classify.setAccessible(true);
@@ -40,11 +40,11 @@ public final class VerifyServerFormat {
 
 			// Метка города не должна срабатывать как подстрока чужих слов:
 			// «mt» внутри слова — не метка.
-			check(classify, channelClass, "Steve: admiral mt", false, "GLOBAL",
+			check(classify, channelClass, "Steve: admiral mt", false, "CHAT",
 					"«mt» внутри слова не считается городом");
-			check(classify, channelClass, "team build", false, "GLOBAL",
+			check(classify, channelClass, "team build", false, "CHAT",
 					"«team» не считается городом");
-			check(classify, channelClass, "Steve: всем привет", false, "GLOBAL",
+			check(classify, channelClass, "Steve: всем привет", false, "CHAT",
 					"обычная реплика остаётся общей");
 
 			// CoreProtect должен опознаваться раньше остального.
@@ -83,9 +83,9 @@ public final class VerifyServerFormat {
 
 			// Чужие строки не должны попадать в CO из-за новых правил: обычная
 			// реплика про возраст не имеет формата «N/m ago».
-			check(classify, channelClass, "Steve: 5/m ago я тут", false, "GLOBAL",
+			check(classify, channelClass, "Steve: 5/m ago я тут", false, "CHAT",
 					"обычная реплика про возраст остаётся общей");
-			check(classify, channelClass, "Steve: page 1 of the book", false, "GLOBAL",
+			check(classify, channelClass, "Steve: page 1 of the book", false, "CHAT",
 					"«page 1» без дроби — не навигация CO");
 
 			// Локальный чат — реальные строки со скриншота. Формат:
@@ -115,11 +115,11 @@ public final class VerifyServerFormat {
 					"глобальный: G и ник из двух слов");
 			// «G» должна быть отдельным словом, иначе под шаблон попало бы
 			// начало любой строки на «g».
-			check(classify, channelClass, "GTA: всем привет", false, "GLOBAL",
+			check(classify, channelClass, "GTA: всем привет", false, "CHAT",
 					"«GTA» не считается глобальным чатом");
-			check(classify, channelClass, "Steve: всем привет", false, "GLOBAL",
+			check(classify, channelClass, "Steve: всем привет", false, "CHAT",
 					"обычная реплика остаётся общей");
-			check(classify, channelClass, "good day всем", false, "GLOBAL",
+			check(classify, channelClass, "good day всем", false, "CHAT",
 					"слово «good» не считается меткой G");
 
 			// Собственный ввод: «?» — город, «!» — глобальный.

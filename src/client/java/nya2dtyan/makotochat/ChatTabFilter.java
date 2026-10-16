@@ -50,11 +50,11 @@ public final class ChatTabFilter {
 
 	private static ChatTabFilter instance;
 
-	/** Текст (нормализованный) → во какие вкладки сообщение попало. */
-	private final Map<String, Set<ChatChannel>> routingByText =
+	/** Текст (нормализованный) → какие категории у сообщения с таким текстом. */
+	private final Map<String, Set<MessageCategory>> routingByText =
 			new LinkedHashMap<>(256, 0.75f, true) {
 				@Override
-				protected boolean removeEldestEntry(Map.Entry<String, Set<ChatChannel>> eldest) {
+				protected boolean removeEldestEntry(Map.Entry<String, Set<MessageCategory>> eldest) {
 					return size() > REMEMBERED_TEXTS;
 				}
 			};
@@ -145,20 +145,20 @@ public final class ChatTabFilter {
 	}
 
 	/**
-	 * Запоминает решение роутера: этот текст виден в таких-то вкладках.
+	 * Запоминает решение роутера: у сообщения с таким текстом такие категории.
 	 *
-	 * <p>Несколько вкладок накапливаются в одном наборе — так повторная запись
-	 * не теряет предыдущие каналы (например, команда CoreProtect видна и в
-	 * «Общий», и в «CO»).
+	 * <p>Категории накапливаются в одном наборе — повторная запись не теряет
+	 * предыдущие (одна и та же строка может быть опознана и как обычный чат,
+	 * и как помеченный городской).
 	 */
-	public void record(String rawText, ChatChannel channel) {
+	public void record(String rawText, MessageCategory category) {
 		if (rawText == null || rawText.isBlank()) {
 			return;
 		}
-		routingByText.compute(ChatChannel.normalize(rawText), (key, existing) -> {
-			Set<ChatChannel> result = existing == null ? EnumSet.noneOf(ChatChannel.class)
+		routingByText.compute(MessageCategory.normalize(rawText), (key, existing) -> {
+			Set<MessageCategory> result = existing == null ? EnumSet.noneOf(MessageCategory.class)
 					: EnumSet.copyOf(existing);
-			result.add(channel);
+			result.add(category);
 			return result;
 		});
 	}
@@ -183,22 +183,20 @@ public final class ChatTabFilter {
 	/**
 	 * Попадает ли строка с таким текстом в активную вкладку.
 	 *
-	 * <p>«Общий» показывает <b>всё</b>, включая ЛС, город и вывод CoreProtect:
-	 * это запасной чат, в котором ничего не теряется. Специфичные вкладки —
-	 * выборки из него, а не его подмножества.
+	 * <p>Раньше «Общий» был особым случаем и показывал всё. Теперь особых
+	 * случаев нет: видимость — это пересечение категорий вкладки и сообщения.
+	 * «Общий» из набора вкладок по умолчанию содержит все категории, поэтому
+	 * ведёт себя точно как прежде, но тикеты из него можно убрать галочкой —
+	 * тогда они останутся только там, где эта категория отмечена.
 	 */
 	public boolean inActiveTab(String text) {
-		ChatChannel active = ChatRouter.getInstance().activeTab();
-		if (active == ChatChannel.GLOBAL) {
-			return true;
-		}
-		return channelsOf(text).contains(active);
+		ChatTab active = TabConfig.getInstance().activeTab();
+		return active.showsAny(categoriesOf(text));
 	}
 
-	/** В какие вкладки попадает сообщение с таким текстом. */
-	public Set<ChatChannel> channelsOf(String text) {
-		String key = ChatChannel.normalize(text);
-		Set<ChatChannel> recorded = routingByText.get(key);
+	/** Какие категории у сообщения с таким текстом. */
+	public Set<MessageCategory> categoriesOf(String text) {
+		Set<MessageCategory> recorded = routingByText.get(MessageCategory.normalize(text));
 		if (recorded != null) {
 			return recorded;
 		}
