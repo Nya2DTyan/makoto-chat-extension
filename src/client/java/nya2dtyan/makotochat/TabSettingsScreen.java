@@ -21,7 +21,7 @@ import java.util.List;
  *   <li><b>Список</b> — вкладки в порядке полоски. Слева ручка, за неё вкладку
  *       перетаскивают; клик по названию открывает редактор; справа глаз
  *       (показывать ли вкладку в полоске) и крестик (удалить). Внизу строка
- *       «＋ Новая вкладка» — она и открывает выбор типов сообщений;</li>
+ *       «+ Новая вкладка» — она и открывает выбор типов сообщений;</li>
  *   <li><b>Редактор</b> — имя вкладки и список типов сообщений с галочками.
  *       Для новой вкладки он пустой, и игрок сам решает, что в неё попадает.</li>
  * </ul>
@@ -39,35 +39,43 @@ import java.util.List;
 public final class TabSettingsScreen extends Screen {
 
 	/** Ширина окна в GUI-пикселях. */
-	static final int PANEL_WIDTH = 260;
+	static final int PANEL_WIDTH = 340;
 
-	/** Заголовок, строки, нижняя подсказка и рамка. */
-	static final int HEADER_HEIGHT = 18;
-	static final int ROW_HEIGHT = 14;
-	static final int ROW_GAP = 2;
-	static final int FOOTER_HEIGHT = 16;
-	static final int PADDING = 6;
+	/** Заголовок, строки, нижняя полоса и рамка. */
+	static final int HEADER_HEIGHT = 22;
+	static final int ROW_HEIGHT = 16;
+	static final int ROW_GAP = 3;
+	static final int FOOTER_HEIGHT = 22;
+	static final int PADDING = 9;
 
 	/** Сторона квадратного бокса с галочкой. */
-	static final int BOX_SIZE = 9;
+	static final int BOX_SIZE = 10;
 
 	/** Ширина служебных мест строки: ручка перетаскивания, глаз, крестик. */
 	static final int HANDLE_WIDTH = 8;
-	static final int BUTTON_WIDTH = 10;
+	static final int BUTTON_WIDTH = 12;
 
-	/** Цвета: ARGB, альфа обязательна — её читает {@code fill} и {@code text}. */
-	private static final int COLOR_PANEL_BG = 0xC8101010;
-	private static final int COLOR_PANEL_BORDER = 0xFF6E6E6E;
-	private static final int COLOR_TITLE = 0xFFFFD24A;
-	private static final int COLOR_ROW_LABEL = 0xFFE0E0E0;
-	private static final int COLOR_ROW_DIM = 0xFF9A9A9A;
-	private static final int COLOR_ROW_HOVER = 0x40FFFFFF;
-	private static final int COLOR_BOX_ON = 0xFF7BD44A;
-	private static final int COLOR_BOX_OFF = 0xFF555555;
-	private static final int COLOR_BOX_MARK = 0xFF101010;
-	private static final int COLOR_FOOTER = 0xFF9A9A9A;
-	private static final int COLOR_HANDLE = 0xFF8A8A8A;
-	private static final int COLOR_FIELD = 0xFF3A3A3A;
+	/**
+	 * Цвета панели: ARGB, альфа обязательна — её читает {@code fill} и {@code text}.
+	 *
+	 * <p>Панель светлее и полупрозрачнее прежней: раньше это был почти чёрный
+	 * прямоугольник, который закрывал мир и выглядел как отдельное окно. Сейчас
+	 * она похожа на ванильные меню поверх игры — видно, что происходит за ней.
+	 */
+	private static final int COLOR_PANEL_BG = 0xA0545468;
+	private static final int COLOR_PANEL_BORDER = 0x77E0E0F0;
+	private static final int COLOR_TITLE = 0xFFFFD98A;
+	private static final int COLOR_ROW_LABEL = 0xFFF4F4F8;
+	private static final int COLOR_ROW_DIM = 0xFFC6C6D6;
+	private static final int COLOR_ROW_HOVER = 0x26FFFFFF;
+	private static final int COLOR_ROW_ACTIVE = 0x30FFD98A;
+	private static final int COLOR_BOX_ON = 0xFF8ED96B;
+	private static final int COLOR_BOX_OFF = 0xFF72728A;
+	private static final int COLOR_BOX_MARK = 0xFF25252E;
+	private static final int COLOR_FOOTER = 0xFFB4B4C4;
+	private static final int COLOR_HANDLE = 0xFF9C9CB0;
+	private static final int COLOR_FIELD = 0x70202028;
+	private static final int COLOR_FIELD_BORDER = 0x55E0E0F0;
 
 	/** Свой заголовок: поле {@code title} у {@link Screen} приватное. */
 	private static final String TITLE = "🔧 Вкладки чата";
@@ -195,7 +203,7 @@ public final class TabSettingsScreen extends Screen {
 		return config.tabs().size() + 2;
 	}
 
-	/** Номер строки «＋ Новая вкладка». */
+	/** Номер строки «+ Новая вкладка». */
 	int newRowIndex() {
 		return config.tabs().size();
 	}
@@ -225,56 +233,77 @@ public final class TabSettingsScreen extends Screen {
 		int panelH = panelHeight(rowCount());
 		graphics.fill(panelX, panelY, panelX + PANEL_WIDTH, panelY + panelH, COLOR_PANEL_BG);
 		outline(graphics, panelX, panelY, PANEL_WIDTH, panelH);
-		graphics.text(font, TITLE, panelX + (PANEL_WIDTH - font.width(TITLE)) / 2, panelY + 5,
+		graphics.text(font, TITLE, panelX + (PANEL_WIDTH - font.width(TITLE)) / 2, panelY + 6,
 				COLOR_TITLE, true);
+
+		// Колонки строки: слева название, за ним типы сообщений, у правого края
+		// глаз и крестик. Названию отдаём половину ширины — иначе длинное имя
+		// наезжало на подпись типов, а та упиралась в кнопки.
+		int textLeft = panelX + PADDING + HANDLE_WIDTH + 2;
+		int buttonsLeft = panelX + PANEL_WIDTH - PADDING - BUTTON_WIDTH * 2 - 8;
+		int nameWidth = (buttonsLeft - textLeft) / 2;
+		int summaryLeft = textLeft + nameWidth + 8;
 
 		List<ChatTab> tabs = config.tabs();
 		for (int i = 0; i < tabs.size(); i++) {
 			ChatTab tab = tabs.get(i);
 			int top = rowTop(panelY, i);
-			if (mouseY >= top && mouseY < top + ROW_HEIGHT) {
+			int textY = top + (ROW_HEIGHT - font.lineHeight) / 2;
+			boolean active = tab == config.activeTab();
+
+			// Активная вкладка подсвечена — видно, что сейчас открыто в чате.
+			if (active) {
+				graphics.fill(panelX + 1, top, panelX + PANEL_WIDTH - 1, top + ROW_HEIGHT,
+						COLOR_ROW_ACTIVE);
+			} else if (mouseY >= top && mouseY < top + ROW_HEIGHT) {
 				graphics.fill(panelX + 1, top, panelX + PANEL_WIDTH - 1, top + ROW_HEIGHT,
 						COLOR_ROW_HOVER);
 			}
 
 			// Ручка перетаскивания: за неё вкладку двигают.
-			graphics.fill(panelX + PADDING, top + 3, panelX + PADDING + 2, top + ROW_HEIGHT - 3,
+			graphics.fill(panelX + PADDING, top + 4, panelX + PADDING + 2, top + ROW_HEIGHT - 4,
 					COLOR_HANDLE);
 
-			// Активную вкладку подсвечиваем: видно, что сейчас открыто в чате.
-			boolean active = tab == config.activeTab();
-			graphics.text(font, tab.name(), panelX + PADDING + HANDLE_WIDTH + 2, top + 3,
+			graphics.text(font, trim(tab.name(), textLeft, textLeft + nameWidth), textLeft, textY,
 					active ? COLOR_TITLE : COLOR_ROW_LABEL, true);
-
+			// Подпись типов показываем, только если она что-то добавляет: у вкладки
+			// с одним типом сообщений она совпадает с названием, и строка выглядела
+			// как задвоенный текст.
 			String summary = summaryOf(tab);
-			int summaryX = panelX + PADDING + HANDLE_WIDTH + 2 + font.width(tab.name()) + 6;
-			int summaryLimit = panelX + PANEL_WIDTH - PADDING - BUTTON_WIDTH * 2 - 6;
-			if (summaryX < summaryLimit) {
-				graphics.text(font, trim(summary, summaryX, summaryLimit), summaryX, top + 3,
-						COLOR_ROW_DIM, false);
+			if (!summary.equalsIgnoreCase(tab.name())) {
+				// На подсвеченной строке серый текст сливался с фоном, поэтому
+				// там подпись рисуем тем же светлым тоном, что и название.
+				graphics.text(font, trim(summary, summaryLeft, buttonsLeft - 6), summaryLeft, textY,
+						active ? COLOR_ROW_LABEL : COLOR_ROW_DIM, false);
 			}
 
 			// Глаз: показывать вкладку в полоске или нет.
-			int eyeX = panelX + PANEL_WIDTH - PADDING - BUTTON_WIDTH * 2 - 2;
-			graphics.text(font, tab.isVisible() ? "◉" : "○", eyeX + 1, top + 3,
+			graphics.text(font, tab.isVisible() ? "◉" : "○",
+					panelX + PANEL_WIDTH - PADDING - BUTTON_WIDTH * 2 - 2, textY,
 					tab.isVisible() ? COLOR_BOX_ON : COLOR_BOX_OFF, true);
 
 			// Крестик у основной вкладки не рисуем: её удалить нельзя.
 			if (!tab.isMain()) {
-				graphics.text(font, "✕", panelX + PANEL_WIDTH - PADDING - BUTTON_WIDTH + 1, top + 3,
+				graphics.text(font, "✕", panelX + PANEL_WIDTH - PADDING - BUTTON_WIDTH + 1, textY,
 						COLOR_ROW_DIM, true);
 			}
 		}
 
 		int newTop = rowTop(panelY, newRowIndex());
-		graphics.text(font, "＋ Новая вкладка", panelX + PADDING + HANDLE_WIDTH + 2, newTop + 3,
+		graphics.text(font, "+ Новая вкладка", textLeft, newTop + (ROW_HEIGHT - font.lineHeight) / 2,
 				COLOR_BOX_ON, true);
 		int resetTop = rowTop(panelY, resetRowIndex());
-		graphics.text(font, "Сбросить настройки", panelX + PADDING + HANDLE_WIDTH + 2, resetTop + 3,
-				COLOR_ROW_DIM, true);
+		graphics.text(font, "Сбросить настройки", textLeft,
+				resetTop + (ROW_HEIGHT - font.lineHeight) / 2, COLOR_ROW_DIM, true);
 
-		graphics.text(font, "ЛКМ по названию — настроить, за ручку — перетащить",
-				panelX + PADDING, panelY + panelH - FOOTER_HEIGHT + 4, COLOR_FOOTER, false);
+		// Тонкая линия отделяет действия и подсказку от списка вкладок — без неё
+		// строки сливались в один столбик.
+		int footerTop = panelY + panelH - FOOTER_HEIGHT;
+		graphics.fill(panelX + PADDING, footerTop - 3, panelX + PANEL_WIDTH - PADDING,
+				footerTop - 2, COLOR_PANEL_BORDER);
+		// Подсказка короткая: подробности видны по самим элементам.
+		graphics.text(font, "клик — настроить · ручка — перетащить", panelX + PADDING,
+				footerTop + 7, COLOR_FOOTER, false);
 	}
 
 	private void drawEditor(GuiGraphicsExtractor graphics) {
@@ -284,20 +313,25 @@ public final class TabSettingsScreen extends Screen {
 		outline(graphics, panelX, panelY, PANEL_WIDTH, panelH);
 
 		String title = editor.isNew() ? "Новая вкладка" : "Вкладка «" + editor.target.name() + "»";
-		graphics.text(font, title, panelX + (PANEL_WIDTH - font.width(title)) / 2, panelY + 5,
+		graphics.text(font, title, panelX + (PANEL_WIDTH - font.width(title)) / 2, panelY + 6,
 				COLOR_TITLE, true);
 
 		// Имя вкладки: своё поле, курсор стоит в конце строки.
 		int fieldTop = rowTop(panelY, 0);
-		graphics.text(font, "Имя:", panelX + PADDING, fieldTop + 3, COLOR_ROW_LABEL, false);
-		int fieldX = panelX + PADDING + font.width("Имя:") + 4;
+		int textY = fieldTop + (ROW_HEIGHT - font.lineHeight) / 2;
+		graphics.text(font, "Имя:", panelX + PADDING, textY, COLOR_ROW_DIM, false);
+		int fieldX = panelX + PADDING + font.width("Имя:") + 6;
 		int fieldRight = panelX + PANEL_WIDTH - PADDING;
 		graphics.fill(fieldX, fieldTop + 1, fieldRight, fieldTop + ROW_HEIGHT - 1, COLOR_FIELD);
-		String shownName = trim(editor.name.toString(), fieldX, fieldRight - 6);
-		graphics.text(font, shownName, fieldX + 2, fieldTop + 3, COLOR_ROW_LABEL, true);
-		int caretX = fieldX + 2 + font.width(shownName);
-		graphics.fill(caretX + 1, fieldTop + 2, caretX + 2, fieldTop + ROW_HEIGHT - 2,
-				COLOR_ROW_LABEL);
+		// Рамка поля: без неё непонятно, что сюда можно печатать.
+		graphics.fill(fieldX, fieldTop, fieldRight, fieldTop + 1, COLOR_FIELD_BORDER);
+		graphics.fill(fieldX, fieldTop + ROW_HEIGHT - 1, fieldRight, fieldTop + ROW_HEIGHT,
+				COLOR_FIELD_BORDER);
+		String shownName = trim(editor.name.toString(), fieldX, fieldRight - 8);
+		graphics.text(font, shownName, fieldX + 4, textY, COLOR_ROW_LABEL, true);
+		int caretX = fieldX + 4 + font.width(shownName);
+		graphics.fill(caretX + 1, fieldTop + 3, caretX + 2, fieldTop + ROW_HEIGHT - 3,
+				COLOR_TITLE);
 
 		// Типы сообщений с галочками — тот самый список для выбора.
 		for (int i = 0; i < all.length; i++) {
@@ -305,15 +339,14 @@ public final class TabSettingsScreen extends Screen {
 			int top = rowTop(panelY, i + 1);
 			boolean on = editor.categories.contains(category);
 			drawCheckbox(graphics, panelX + PADDING, top + (ROW_HEIGHT - BOX_SIZE) / 2, on);
-			graphics.text(font, category.displayName(), panelX + PADDING + BOX_SIZE + 6, top + 3,
+			graphics.text(font, category.displayName(), panelX + PADDING + BOX_SIZE + 8,
+					top + (ROW_HEIGHT - font.lineHeight) / 2,
 					on ? COLOR_ROW_LABEL : COLOR_ROW_DIM, true);
 		}
 
-		int buttonTop = panelY + panelH - FOOTER_HEIGHT + 4;
-		graphics.text(font, "ЛКМ по типу — вкл/выкл", panelX + PADDING, buttonTop, COLOR_FOOTER,
-				false);
 		// Из редактора должно быть два выхода: кнопкой и по Esc. Раньше был
 		// только «Готово», а Esc не обрабатывался — выйти было нечем.
+		int buttonTop = panelY + panelH - FOOTER_HEIGHT + 6;
 		graphics.text(font, "[Назад]", backButtonLeft(panelX), buttonTop, COLOR_ROW_LABEL, true);
 		graphics.text(font, "[Готово]", doneButtonLeft(panelX), buttonTop, COLOR_BOX_ON, true);
 	}

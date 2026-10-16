@@ -91,8 +91,10 @@ public class VerifySettingsScreen {
 			int buttonY = editorPanelY + editorHeight - 8;
 			int backX = (int) method(screenClass, "backButtonLeft", int.class).invoke(null, panelX);
 			int doneX = (int) method(screenClass, "doneButtonLeft", int.class).invoke(null, panelX);
+			int panelWidth = (int) field(screenClass, "PANEL_WIDTH").get(null);
 			check("кнопка «Назад» стоит слева от «Готово»", backX < doneX);
-			check("обе кнопки внутри окна", backX > panelX && doneX + 60 <= panelX + 260);
+			check("обе кнопки внутри окна",
+					backX > panelX && doneX + 60 <= panelX + panelWidth);
 			click(screen, base, backX + 5, buttonY);
 			check("клик по «Назад» выходит из редактора", editor(screenClass, screen) == null);
 
@@ -174,17 +176,20 @@ public class VerifySettingsScreen {
 		field.setInt(target, value);
 	}
 
+	/** Поле, доступное для чтения: экран объявляет их пакетно. */
+	private static Field field(Class<?> owner, String name) throws Exception {
+		Field found = owner.getDeclaredField(name);
+		found.setAccessible(true);
+		return found;
+	}
+
 	/** Считается ли, что экран запросил ввод текста: счётчик вызовов в самом экране. */
 	private static boolean textInputRequested(Class<?> screenClass, Object screen) throws Exception {
-		Field flag = screenClass.getDeclaredField("textInputOn");
-		flag.setAccessible(true);
-		return (boolean) flag.get(screen);
+		return (boolean) field(screenClass, "textInputOn").get(screen);
 	}
 
 	private static Object editor(Class<?> screenClass, Object screen) throws Exception {
-		Field field = screenClass.getDeclaredField("editor");
-		field.setAccessible(true);
-		return field.get(screen);
+		return field(screenClass, "editor").get(screen);
 	}
 
 	private static String nameOf(Class<?> screenClass, Object screen) throws Exception {
@@ -192,17 +197,13 @@ public class VerifySettingsScreen {
 		if (edit == null) {
 			throw new IllegalStateException("редактор не открыт");
 		}
-		Field name = edit.getClass().getDeclaredField("name");
-		name.setAccessible(true);
-		return name.get(edit).toString();
+		return field(edit.getClass(), "name").get(edit).toString();
 	}
 
 	private static boolean draftHasCategory(Class<?> screenClass, Object screen, Object category)
 			throws Exception {
 		Object edit = editor(screenClass, screen);
-		Field categories = edit.getClass().getDeclaredField("categories");
-		categories.setAccessible(true);
-		return ((java.util.Set<?>) categories.get(edit)).contains(category);
+		return ((java.util.Set<?>) field(edit.getClass(), "categories").get(edit)).contains(category);
 	}
 
 	private static void click(Object screen, Class<?> base, int x, int y) throws Exception {
