@@ -66,11 +66,13 @@ dependencies {
 tasks.withType(ProcessResources).configureEach {
 	def modVersion = project.version
 	def mcDep = project.mc_dep
+	def apiDep = project.fabric_api_dep
 	inputs.property "version", modVersion
 	inputs.property "mc_dep", mcDep
+	inputs.property "fabric_api_dep", apiDep
 
 	filesMatching("fabric.mod.json") {
-		expand "version": modVersion, "mc_dep": mcDep
+		expand "version": modVersion, "mc_dep": mcDep, "fabric_api_dep": apiDep
 	}
 }
 
